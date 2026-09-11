@@ -1,0 +1,21 @@
+# Credentials — the Flex token is a real credential. Never commit.
+.env
+
+# Cached Flex statements may contain account numbers and full trade history.
+.cache/
+
+# Raw statement dumps from `flex.py --dump` — same sensitivity.
+flex_dump.xml
+statement.xml
+*.flex.xml
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+
+# macOS
+.DS_Store

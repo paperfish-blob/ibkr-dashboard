@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Realized P&amp;L</title>
+<!-- Vendored, not CDN: this dashboard reads cached data and should keep
+     working when the network does not. Chart.js v4.5.1, MIT. -->
+<script src="/static/vendor/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0d1117;
+    --panel: #151b23;
+    --line: #232c38;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --pos: #3fb950;
+    --neg: #f85149;
+    --warn: #d29922;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    padding-block: 40px;
+    padding-inline: 20px;
+  }
+  .wrap { max-width: 860px; margin: 0 auto; }
+
+  header { display: flex; align-items: baseline; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 24px; }
+  h1 { font-size: 15px; font-weight: 600; margin: 0; letter-spacing: .02em; }
+  .account { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 28px; margin-bottom: 16px; }
+
+  .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .08em; margin-bottom: 10px; }
+  .headline {
+    font-size: clamp(40px, 9vw, 64px);
+    font-weight: 650;
+    letter-spacing: -.02em;
+    font-variant-numeric: tabular-nums;
+    line-height: 1.05;
+  }
+  .today { margin-top: 10px; font-size: 14px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .pos { color: var(--pos); }
+  .neg { color: var(--neg); }
+
+  .chart-box { position: relative; height: 300px; }
+  @media (max-width: 560px) { .chart-box { height: 220px; } }
+
+  footer { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+  .badge {
+    display: inline-flex; align-items: center; gap: 6px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 999px; padding: 5px 12px;
+    font-size: 12px; color: var(--muted);
+  }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--muted); }
+  .dot.live { background: var(--pos); }
+  .dot.off { background: #6e7681; }
+
+  .alert {
+    border: 1px solid var(--warn); background: rgba(210,153,34,.09);
+    color: var(--warn); border-radius: 10px; padding: 12px 16px;
+    margin-bottom: 16px; font-size: 13px;
+  }
+  .empty { color: var(--muted); text-align: center; padding: 40px 0; font-size: 13px; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Realized P&amp;L</h1>
+    <span class="account" id="account"></span>
+  </header>
+
+  <div class="alert hidden" id="alert"></div>
+
+  <div class="panel">
+    <div class="label" id="headline-label">Total realized</div>
+    <div class="headline" id="headline">—</div>
+    <div class="today" id="today"></div>
+  </div>
+
+  <div class="panel">
+    <div class="label">Cumulative</div>
+    <div class="chart-box"><canvas id="chart"></canvas></div>
+    <div class="empty hidden" id="empty">No realizing trades in this statement period.</div>
+  </div>
+
+  <footer>
+    <span class="badge"><span class="dot" id="gw-dot"></span><span id="gw-text">Gateway —</span></span>
+    <span class="badge"><span class="dot" id="flex-dot"></span><span id="flex-text">Flex —</span></span>
+    <span class="badge" id="source-badge">Today from —</span>
+  </footer>
+</div>
+
+<script>
+const REFRESH_MS = 30000;
+let chart = null;
+
+const fmtMoney = (value, currency) =>
+  new Intl.NumberFormat("en-US", {
+    style: "currency", currency: currency || "USD",
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+    signDisplay: "exceptZero",
+  }).format(value);
+
+const fmtDay = (iso) =>
+  new Date(iso + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+const fmtTime = (iso) =>
+  iso ? new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "never";
+
+const signClass = (n) => (n < 0 ? "neg" : "pos");
+
+function renderChart(series, currency) {
+  const canvas = document.getElementById("chart");
+  const empty = document.getElementById("empty");
+
+  const showMessage = (text) => {
+    canvas.style.display = "none";
+    empty.textContent = text;
+    empty.classList.remove("hidden");
+  };
+
+  if (!series.length) {
+    showMessage("No realizing trades in this statement period.");
+    return;
+  }
+  // Say what actually went wrong rather than falling through to the
+  // empty state, which would claim there is no data when there is.
+  if (typeof Chart === "undefined") {
+    showMessage("Chart library failed to load — the figures above are still correct.");
+    return;
+  }
+  canvas.style.display = "";
+  empty.classList.add("hidden");
+
+  const labels = series.map((p) => fmtDay(p.date));
+  const values = series.map((p) => Number(p.cumulative));
+  const last = values[values.length - 1];
+  const negative = last < 0;
+  const colour = negative ? "#f85149" : "#3fb950";
+
+  const ctx = canvas.getContext("2d");
+  // Rebuilt on every render so the fill tracks the sign along with the line.
+  const gradient = () => {
+    const rgb = negative ? "248,81,73" : "63,185,80";
+    const g = ctx.createLinearGradient(0, 0, 0, canvas.height || 300);
+    g.addColorStop(0, `rgba(${rgb},.22)`);
+    g.addColorStop(1, `rgba(${rgb},0)`);
+    return g;
+  };
+
+  if (chart) {
+    chart.data.labels = labels;
+    chart.data.datasets[0].data = values;
+    chart.data.datasets[0].borderColor = colour;
+    chart.data.datasets[0].backgroundColor = gradient();
+    chart.update("none");
+    return;
+  }
+
+  const fill = gradient();
+
+  chart = new Chart(ctx, {
+    type: "line",
+    data: {
+      labels,
+      datasets: [{
+        data: values,
+        borderColor: colour,
+        backgroundColor: fill,
+        borderWidth: 2,
+        fill: true,
+        tension: 0.2,
+        pointRadius: 0,
+        pointHoverRadius: 4,
+      }],
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      interaction: { mode: "index", intersect: false },
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: (item) => fmtMoney(item.parsed.y, currency),
+          },
+        },
+      },
+      scales: {
+        x: { grid: { display: false }, ticks: { color: "#8b949e", maxTicksLimit: 8 } },
+        y: {
+          grid: { color: "#232c38" },
+          ticks: {
+            color: "#8b949e",
+            callback: (v) => new Intl.NumberFormat("en-US", { notation: "compact" }).format(v),
+          },
+        },
+      },
+    },
+  });
+}
+
+function render(data) {
+  const headline = Number(data.headline);
+  const today = Number(data.today);
+
+  const headlineEl = document.getElementById("headline");
+  headlineEl.textContent = fmtMoney(headline, data.currency);
+  headlineEl.className = "headline " + signClass(headline);
+
+  document.getElementById("today").innerHTML =
+    data.today_source === "none"
+      ? "No realized P&amp;L today."
+      : `Today <span class="${signClass(today)}">${fmtMoney(today, data.currency)}</span>`;
+
+  document.getElementById("account").textContent = data.account_id || "";
+
+  // Gateway badge
+  const gwDot = document.getElementById("gw-dot");
+  const gw = data.gateway;
+  gwDot.className = "dot " + (gw.connected ? "live" : "off");
+  document.getElementById("gw-text").textContent = gw.connected
+    ? `Gateway live · ${fmtTime(gw.updated_at)}`
+    : "Gateway disconnected";
+
+  // Flex badge
+  const flexDot = document.getElementById("flex-dot");
+  flexDot.className = "dot " + (data.flex_ok ? "live" : "off");
+  document.getElementById("flex-text").textContent = data.flex_ok
+    ? `Flex · ${fmtTime(data.flex_fetched_at)} · ${data.trade_count} trades`
+    : "Flex unavailable";
+
+  document.getElementById("source-badge").textContent = "Today from " + data.today_source;
+
+  // Warnings: a stale/expired token must not read as a genuine zero.
+  const alert = document.getElementById("alert");
+  const problems = [data.flex_error, data.currency_warning].filter(Boolean);
+  if (problems.length) {
+    alert.textContent = problems.join(" — ");
+    alert.classList.remove("hidden");
+  } else {
+    alert.classList.add("hidden");
+  }
+
+  renderChart(data.series, data.currency);
+}
+
+function showFatal(message) {
+  const alert = document.getElementById("alert");
+  alert.textContent = message;
+  alert.classList.remove("hidden");
+}
+
+async function tick() {
+  let data;
+  // Fetching and rendering are reported separately: a rendering bug
+  // must not be blamed on the API, which is what makes such a message
+  // impossible to act on.
+  try {
+    const response = await fetch("/api/pnl");
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    data = await response.json();
+  } catch (err) {
+    showFatal("Could not reach the dashboard API: " + err.message);
+    return;
+  }
+
+  try {
+    render(data);
+  } catch (err) {
+    showFatal("Failed to render: " + err.message);
+  }
+}
+
+tick();
+setInterval(tick, REFRESH_MS);
+</script>
+</body>
+</html>

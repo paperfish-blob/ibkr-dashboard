@@ -1,0 +1,28 @@
+[project]
+name = "ibkr-pnl"
+version = "0.1.0"
+description = "Local dashboard for IBKR realized P&L (Flex Web Service + IB Gateway)"
+readme = "README.md"
+authors = [
+    { name = "paperfish", email = "paperfish6969@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.141.1",
+    "httpx>=0.28.1",
+    "ib-async>=2.1",
+    "pydantic-settings>=2.15.0",
+    "uvicorn[standard]>=0.52.4",
+]
+
+[build-system]
+requires = ["uv_build>=0.10.9,<0.11.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
