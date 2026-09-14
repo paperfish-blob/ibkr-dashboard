@@ -21,4 +21,4 @@ __pycache__/
 .DS_Store
 
 # Separate frontend project, not part of this repo's history.
-frontend-modern/
+frontend-modern-library/
