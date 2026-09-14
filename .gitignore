@@ -20,5 +20,5 @@ __pycache__/
 # macOS
 .DS_Store
 
-# Separate frontend project, not part of this repo's history.
-frontend-modern-library/
+# Separate frontend project, not part of this repo's history. For UI reference.
+ui-reference/
