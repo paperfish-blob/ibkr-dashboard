@@ -15,14 +15,36 @@ IB Gateway needs an interactive login each day, so it is down much of the
 time. That is expected: the dashboard falls back to Flex and shows a
 "Gateway disconnected" badge rather than failing.
 
+The UI is a SvelteKit app in [frontend/](frontend/), sharing its design
+language with the `ui-reference` dashboard.
+
 ## Quick start
 
 ```bash
-cp .env.example .env      # then fill in the values from the setup below
-uv run uvicorn ibkr_pnl.server:app --port 8000
+cp .env.example .env            # then fill in the values from the setup below
+
+cd frontend && npm install && npm run build && cd ..
+uv run uvicorn ibkr_pnl.server:app --port 9001
 ```
 
-Open <http://localhost:8000>.
+Open <http://localhost:9001>. FastAPI serves both the API and the built UI on
+that one port, so there is no CORS setup and nothing else to run.
+
+Skip the `npm` step and it still works — the server falls back to the original
+single-file dashboard when `frontend/build/` is absent.
+
+### Developing the frontend
+
+Two processes, with Vite proxying `/api` to the backend so the browser still
+sees one origin:
+
+```bash
+uv run uvicorn ibkr_pnl.server:app --port 9001   # terminal 1
+cd frontend && npm run dev                       # terminal 2
+```
+
+Open <http://localhost:5173> for hot reload. Run `npm run build` again when
+you want the `:9001` build to pick the changes up.
 
 ## Setup
 
@@ -137,15 +159,29 @@ src/ibkr_pnl/
   sources/gateway.py  persistent ib_async connection, reqPnL subscription
   cache.py            disk cache (the Flex token is rate limited)
   aggregate.py        merges both sources
-  server.py           FastAPI: /api/pnl, /api/health
-  static/index.html   the dashboard
+  server.py           FastAPI: /api/*, plus serving the frontend build
+  static/index.html   fallback dashboard, used when frontend/build is absent
+
+frontend/
+  src/app.css                     design tokens (shared with ui-reference)
+  src/routes/+page.svelte         Overview: headline + cumulative chart
+  src/routes/transactions/        the per-trade ledger
+  src/lib/api.ts                  typed client; Decimals arrive as strings
+  src/lib/format.ts               money/date formatters, tone helper
+  src/lib/stores.ts               data stores + persisted filter preference
+  src/lib/components/             PageHeader, SegToggle, ledger, chart, badges
 ```
 
 ## Notes
 
-- **Multi-currency:** if the statement spans currencies, totals add raw
-  values without FX conversion and the page says so. Single-currency
-  accounts are unaffected.
+- **Ledger columns follow your Flex Query.** Price, Amount, Commission and
+  Time only appear if the query exports those fields; columns with no data
+  anywhere are hidden, and the ledger header names what's missing. Add the
+  fields in Client Portal and they come back on their own.
+- **Multi-currency:** if trades that actually carry realized P&L span
+  currencies, totals add raw values without FX conversion and the page says
+  so. A foreign-currency *opening* trade is ignored for this — it contributes
+  exactly 0, so it can neither distort a total nor relabel the headline.
 - **Rate limits:** the Flex token allows 1 request/second and 10/minute.
   Statements are cached for 15 minutes (`FLEX_CACHE_TTL_SECONDS`); append
   `?refresh=1` to `/api/pnl` to force a fetch.

@@ -17,6 +17,7 @@ P&L" is gross; commission is shown as a separate line, not netted in.
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date
 from decimal import Decimal
 from itertools import groupby
@@ -47,16 +48,29 @@ def _build_series(trades: list[RealizedTrade]) -> list[CumulativePoint]:
 
 def _resolve_currency(trades: list[RealizedTrade]) -> tuple[str, str]:
     """Return (currency, warning). Summing across currencies is meaningless,
-    so we surface a warning rather than inventing an FX conversion."""
-    currencies = sorted({t.currency for t in trades if t.currency})
-    if not currencies:
+    so we surface a warning rather than inventing an FX conversion.
+
+    Only trades that actually carry realized P&L count. An opening trade
+    contributes exactly 0, so its currency cannot distort any total -- it must
+    not relabel the headline or raise a warning. A real account showed why:
+    two SGD opening trades among 698 USD ones were enough to relabel an
+    entirely USD figure as SGD and warn about an FX exposure that did not
+    exist.
+
+    Among currencies that do contribute, the most common wins rather than the
+    alphabetically first -- "SGD" sorting before "USD" is what made the
+    mislabel possible.
+    """
+    counts = Counter(t.currency for t in trades if t.is_realizing and t.currency)
+    if not counts:
         return "USD", ""
-    if len(currencies) == 1:
-        return currencies[0], ""
+    currency = counts.most_common(1)[0][0]
+    if len(counts) == 1:
+        return currency, ""
     return (
-        currencies[0],
+        currency,
         "Statement spans multiple currencies ("
-        + ", ".join(currencies)
+        + ", ".join(sorted(counts))
         + "); totals add raw values without FX conversion.",
     )
 

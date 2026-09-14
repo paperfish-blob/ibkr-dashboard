@@ -22,3 +22,8 @@ __pycache__/
 
 # Separate frontend project, not part of this repo's history. For UI reference.
 ui-reference/
+
+# Frontend — source is tracked, build artifacts are not.
+frontend/node_modules/
+frontend/build/
+frontend/.svelte-kit/

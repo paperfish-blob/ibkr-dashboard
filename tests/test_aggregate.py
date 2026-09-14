@@ -153,6 +153,43 @@ def test_multi_currency_statement_is_flagged_not_silently_summed():
     assert "EUR" in result.currency_warning and "USD" in result.currency_warning
 
 
+def test_a_foreign_currency_opening_trade_does_not_relabel_the_headline():
+    """Found on a real account: two SGD *opening* trades among 698 USD ones
+    relabelled an entirely USD headline as "SGD" and warned about an FX
+    exposure that did not exist. An opening trade's realized_pnl is 0, so its
+    currency cannot distort any total and must not drive the label."""
+    result = combine(
+        flex(
+            trade(date(2026, 9, 10), "1000", currency="USD"),
+            trade(date(2026, 9, 10), "0", symbol="SGDOPEN", currency="SGD"),
+        ),
+        GatewayState(connected=False),
+        today=TODAY,
+    )
+
+    assert result.currency == "USD"
+    assert result.currency_warning == ""
+    assert result.headline == Decimal("1000")
+
+
+def test_dominant_currency_wins_not_the_alphabetically_first():
+    """"SGD" sorting before "USD" is what made the mislabel possible, so the
+    choice among genuinely contributing currencies is by weight, not by name."""
+    result = combine(
+        flex(
+            trade(date(2026, 9, 10), "1000", currency="USD"),
+            trade(date(2026, 9, 10), "900", symbol="B", currency="USD"),
+            trade(date(2026, 9, 10), "5", symbol="C", currency="SGD"),
+        ),
+        GatewayState(connected=False),
+        today=TODAY,
+    )
+
+    assert result.currency == "USD"
+    # Two currencies really do carry P&L here, so the warning is correct.
+    assert "multiple currencies" in result.currency_warning
+
+
 def test_flex_failure_is_carried_through_to_the_response():
     result = combine(
         FlexResult(ok=False, error="Flex error 1012: Token has expired."),
