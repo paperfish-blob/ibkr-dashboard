@@ -1,7 +1,8 @@
 # IBKR Realized P&L Dashboard
 
 A local dashboard showing the latest realized P&L for your IBKR account: a
-headline total and a cumulative-P&L-over-time chart.
+headline total, a cumulative-P&L-over-time chart, and a per-trade
+transaction ledger grouped by day.
 
 It reads two sources and works with either one alone:
 
@@ -30,17 +31,29 @@ Open <http://localhost:8000>.
 Client Portal → **Performance & Reports** → **Flex Queries** → new
 **Activity Flex Query**:
 
-- **Section:** Trades. Fields: `symbol`, `tradeDate`, `fifoPnlRealized`,
-  `ibCommission`, `currency`, `assetCategory`, `quantity`, `buySell`.
+- **Section:** Trades. Level of detail: **Execution** only (leave Order and
+  Closed Lots off — enabling more than one level emits several rows per
+  fill, and each row repeats the same realized P&L).
+- **Fields, required for the headline and chart:** Currency, Symbol, Trade
+  Date, Realized P/L, IB Commission, Buy/Sell, Quantity.
+- **Fields, additionally needed for the transaction ledger:** Date/Time,
+  Trade Price, Trade Money, Order Type, Notes/Codes, Exchange, Asset Class.
+  Skip these and the ledger still works — those columns just render blank
+  for rows missing the field.
 - **Date range:** Year to Date
 - **Format:** XML
 
-Save it and note the **Query ID** → `FLEX_QUERY_ID`.
+Save it and note the **Query ID** → `FLEX_QUERY_ID`. If you already created
+the query with only the first field set, edit it and add the second set —
+no need to start over or change the query ID.
 
-> Set **one** level of detail on the Trades section. If a query emits both
-> Execution and Order (or Closed Lot) rows, each fill appears more than once.
-> The parser keeps a single level to defend against this, but configuring it
-> correctly is better.
+> The ledger fields' underlying XML attribute names (`tradeMoney`,
+> `orderType`, etc.) are IBKR's documented names but weren't checked against
+> a real export before this was written. After adding them, run `--dump`
+> (below) once — if a column comes out blank in the dashboard despite being
+> checked in the query, the raw attributes it prints will show the actual
+> name so [flex.py](src/ibkr_pnl/sources/flex.py)'s `_first(...)` lookups
+> can be corrected.
 
 ### 2. Flex token
 
@@ -88,15 +101,18 @@ uv run python -m ibkr_pnl.sources.flex --dump statement.xml
 ```
 
 This writes the raw statement and prints the summed `fifoPnlRealized`,
-summed `ibCommission`, and the net. Compare the headline against Client
-Portal's own realized P&L.
+summed `ibCommission`, and the net (`fifoPnlRealized + ibCommission`).
+Compare **`sum fifoPnlRealized`** — not the net figure — against Client
+Portal's own realized P&L; that's what the dashboard displays throughout.
 
-**If they disagree,** the likely cause is commission treatment:
-`fifoPnlRealized` is normally already net of the closing trade's commission,
-but this is worth confirming against your own data rather than assuming. The
-parser keeps `ibCommission` on every trade, so switching to
-`realized_pnl + commission` in [aggregate.py](src/ibkr_pnl/aggregate.py) is a
-one-line change if your account shows otherwise.
+This was checked against a real account: the whole-statement gross sum
+landed within a couple of dollars of Client Portal's own YTD total (the
+small gap was fully explained by a handful of trades in the few days
+outside the fetched date range), while the net figure was off by hundreds
+of dollars. IBKR's own "Realized P&L" is gross — commission is a separate
+line item, not netted into it. `RealizedTrade.net_pnl` is still available
+in the API if you want a commission-inclusive figure for your own use, but
+it is not what the headline or ledger show.
 
 `statement.xml` contains your account number and full trade history — it is
 gitignored, but delete it when you are done.

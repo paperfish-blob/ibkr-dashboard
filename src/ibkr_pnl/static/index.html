@@ -68,6 +68,80 @@
   }
   .empty { color: var(--muted); text-align: center; padding: 40px 0; font-size: 13px; }
   .hidden { display: none !important; }
+
+  /* Transaction ledger */
+  .tx-summary { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 4px; }
+  .tx-range { color: var(--muted); font-size: 12px; }
+  .tx-total { font-weight: 650; font-variant-numeric: tabular-nums; }
+
+  .day-header {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 14px 0 8px; margin-top: 6px;
+    border-bottom: 1px solid var(--line);
+    color: var(--muted); font-size: 12px;
+  }
+  .day-header:first-of-type { margin-top: 2px; }
+  .day-total { font-weight: 650; font-variant-numeric: tabular-nums; font-size: 13px; }
+
+  .trade-row {
+    display: flex; justify-content: space-between; gap: 14px;
+    padding: 12px 0; border-bottom: 1px solid var(--line);
+  }
+  .trade-row:last-child { border-bottom: none; }
+  .trade-left { min-width: 0; }
+  .trade-symbol-line { display: flex; align-items: baseline; gap: 6px; flex-wrap: wrap; }
+  .trade-symbol { font-weight: 650; }
+  .trade-tag { color: var(--muted); font-size: 11px; }
+  .trade-category { color: var(--muted); font-size: 12px; }
+  .trade-side-line { font-size: 13px; }
+  .trade-side.buy { color: #58a6ff; }
+  .trade-side.sell { color: var(--neg); }
+  .trade-order { color: var(--muted); font-size: 12px; }
+
+  .trade-fill {
+    text-align: right; flex: 0 0 auto; min-width: 96px;
+    font-variant-numeric: tabular-nums;
+  }
+  .trade-price { font-weight: 600; }
+  .trade-amount, .trade-commission { color: var(--muted); font-size: 12px; }
+
+  .trade-outcome {
+    text-align: right; flex: 0 0 auto; min-width: 76px;
+    font-variant-numeric: tabular-nums;
+  }
+  .trade-time { color: var(--muted); font-size: 12px; }
+  .trade-pnl { font-weight: 650; }
+  .trade-pnl.neutral { color: var(--muted); font-weight: 500; }
+
+  .tx-filter {
+    display: inline-flex; border: 1px solid var(--line); border-radius: 999px;
+    padding: 2px; gap: 2px; flex: 0 0 auto;
+  }
+  .tx-filter button {
+    border: none; background: transparent; color: var(--muted);
+    font: inherit; font-size: 12px; padding: 5px 12px; border-radius: 999px;
+    cursor: pointer;
+  }
+  .tx-filter button.active { background: var(--line); color: var(--text); }
+
+  @media (max-width: 620px) {
+    .trade-row { flex-wrap: wrap; }
+    /* A row of unbroken numbers ("$71,829.52") can force the whole page
+       wider than the viewport if it isn't allowed to wrap or shrink. */
+    .trade-fill {
+      text-align: left; order: 3; flex-basis: 100%;
+      display: flex; flex-wrap: wrap; gap: 4px 14px; min-width: 0;
+    }
+    .trade-fill > div { min-width: 0; }
+    .trade-outcome { order: 2; }
+  }
+
+  .load-more {
+    display: block; width: 100%; margin-top: 12px;
+    background: transparent; border: 1px solid var(--line); border-radius: 8px;
+    color: var(--muted); padding: 10px; font-size: 13px; cursor: pointer;
+  }
+  .load-more:hover { border-color: #364152; color: var(--text); }
 </style>
 </head>
 <body>
@@ -91,6 +165,23 @@
     <div class="empty hidden" id="empty">No realizing trades in this statement period.</div>
   </div>
 
+  <div class="panel">
+    <div class="tx-summary">
+      <div>
+        <div class="label" style="margin-bottom:2px;">Transactions</div>
+        <div class="tx-range" id="tx-range"></div>
+      </div>
+      <div class="tx-filter" id="tx-filter">
+        <button type="button" data-filter="all" class="active">All trades</button>
+        <button type="button" data-filter="realized">Realized only</button>
+      </div>
+      <div class="tx-total" id="tx-total"></div>
+    </div>
+    <div id="tx-list"></div>
+    <div class="empty hidden" id="tx-empty">No realizing trades in this statement period.</div>
+    <button class="load-more hidden" id="tx-load-more">Show more</button>
+  </div>
+
   <footer>
     <span class="badge"><span class="dot" id="gw-dot"></span><span id="gw-text">Gateway —</span></span>
     <span class="badge"><span class="dot" id="flex-dot"></span><span id="flex-text">Flex —</span></span>
@@ -111,6 +202,20 @@ const fmtMoney = (value, currency) =>
 
 const fmtDay = (iso) =>
   new Date(iso + "T00:00:00").toLocaleDateString("en-US", { month: "short", day: "numeric" });
+
+const fmtFullDate = (iso) =>
+  new Date(iso + "T00:00:00").toLocaleDateString("en-US", { month: "long", day: "numeric", year: "numeric" });
+
+const fmtQty = (q) => new Intl.NumberFormat("en-US").format(Math.abs(Number(q)));
+
+const fmtNum = (value, maxFrac) =>
+  new Intl.NumberFormat("en-US", { minimumFractionDigits: 2, maximumFractionDigits: maxFrac }).format(value);
+
+// Prices need variable precision (Intl's currency style forces a fixed
+// fraction count), so the symbol is prefixed by hand instead.
+const CURRENCY_SYMBOLS = { USD: "$", EUR: "€", GBP: "£", JPY: "¥" };
+const fmtPriceLike = (value, currency, maxFrac) =>
+  (CURRENCY_SYMBOLS[currency] || currency + " ") + fmtNum(value, maxFrac);
 
 const fmtTime = (iso) =>
   iso ? new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" }) : "never";
@@ -253,6 +358,159 @@ function render(data) {
   renderChart(data.series, data.currency);
 }
 
+const DAYS_PER_PAGE = 20;
+let txDaysAll = [];   // every day, every execution -- as the server sent it
+let txDays = [];      // the currently filtered view of the above
+let txShown = 0;
+let txCurrency = "USD";
+let txFilter = "all"; // "all" | "realized" -- "all" is the default
+
+function tradeRow(t) {
+  const row = document.createElement("div");
+  row.className = "trade-row";
+
+  const side = (t.buy_sell || "").toUpperCase();
+  const sideLabel = side === "BUY" ? "Bought" : side === "SELL" ? "Sold" : (t.buy_sell || "");
+  const sideClass = side === "BUY" ? "buy" : side === "SELL" ? "sell" : "";
+
+  const orderBits = [t.order_type, t.notes_codes].filter(Boolean).join(" · ");
+
+  const left = document.createElement("div");
+  left.className = "trade-left";
+  left.innerHTML = `
+    <div class="trade-symbol-line">
+      <span class="trade-symbol">${t.symbol}</span>
+      ${t.exchange ? `<span class="trade-tag">${t.exchange}</span>` : ""}
+    </div>
+    ${t.asset_category ? `<div class="trade-category">${t.asset_category}</div>` : ""}
+    <div class="trade-side-line">
+      <span class="trade-side ${sideClass}">${sideLabel}</span> ${fmtQty(t.quantity)}
+    </div>
+    ${orderBits ? `<div class="trade-order">${orderBits}</div>` : ""}
+  `;
+
+  const fill = document.createElement("div");
+  fill.className = "trade-fill";
+  fill.innerHTML = `
+    ${t.trade_price != null ? `<div class="trade-price">${fmtPriceLike(Number(t.trade_price), t.currency, 4)}</div>` : ""}
+    ${t.trade_money != null ? `<div class="trade-amount">${fmtPriceLike(Number(t.trade_money), t.currency, 2)}</div>` : ""}
+    ${t.commission ? `<div class="trade-commission">${fmtPriceLike(Math.abs(Number(t.commission)), t.currency, 2)}</div>` : ""}
+  `;
+
+  const outcome = document.createElement("div");
+  outcome.className = "trade-outcome";
+  // realized_pnl (fifoPnlRealized) is what IBKR's own apps display here --
+  // checked against a real account's whole-statement total; commission is
+  // shown separately, not netted into this figure. An opening trade has no
+  // P&L yet (is_realizing is false) -- shown as a plain dash, not a colored
+  // $0.00, so it doesn't read as a break-even close.
+  const pnlHtml = t.is_realizing
+    ? `<div class="trade-pnl ${signClass(Number(t.realized_pnl))}">${fmtMoney(Number(t.realized_pnl), t.currency)}</div>`
+    : `<div class="trade-pnl neutral">—</div>`;
+  outcome.innerHTML = `
+    ${t.trade_time ? `<div class="trade-time">${t.trade_time}</div>` : ""}
+    ${pnlHtml}
+  `;
+
+  row.append(left, fill, outcome);
+  return row;
+}
+
+function renderTxPage() {
+  const list = document.getElementById("tx-list");
+  const moreBtn = document.getElementById("tx-load-more");
+
+  const slice = txDays.slice(txShown, txShown + DAYS_PER_PAGE);
+  const fragment = document.createDocumentFragment();
+
+  for (const day of slice) {
+    const header = document.createElement("div");
+    header.className = "day-header";
+    header.innerHTML = `
+      <span>${fmtFullDate(day.date)}</span>
+      <span class="day-total ${signClass(Number(day.total_pnl))}">${fmtMoney(Number(day.total_pnl), txCurrency)}</span>
+    `;
+    fragment.appendChild(header);
+    for (const t of day.trades) fragment.appendChild(tradeRow(t));
+  }
+
+  list.appendChild(fragment);
+  txShown += slice.length;
+  moreBtn.classList.toggle("hidden", txShown >= txDays.length);
+}
+
+function applyTxFilter() {
+  const list = document.getElementById("tx-list");
+  const empty = document.getElementById("tx-empty");
+  const moreBtn = document.getElementById("tx-load-more");
+
+  list.innerHTML = "";
+  txShown = 0;
+
+  // "Realized only" hides opening trades client-side and drops any day left
+  // with nothing in it (a day of opens only nets to $0, so it would render
+  // as an empty header with no rows under it otherwise). A day's total_pnl
+  // does not need recomputing either way -- an opening trade contributes 0.
+  txDays =
+    txFilter === "realized"
+      ? txDaysAll
+          .map((day) => ({ ...day, trades: day.trades.filter((t) => t.is_realizing) }))
+          .filter((day) => day.trades.length > 0)
+      : txDaysAll;
+
+  const allTrades = txDays.flatMap((d) => d.trades);
+  const tradeCount = allTrades.length;
+
+  document.getElementById("tx-range").textContent = tradeCount
+    ? `${tradeCount} trade(s) · ${fmtDay(txDays[txDays.length - 1].date)} – ${fmtDay(txDays[0].date)}`
+    : "";
+
+  const totalEl = document.getElementById("tx-total");
+  const total = allTrades.reduce((sum, t) => sum + Number(t.realized_pnl), 0);
+  if (tradeCount) {
+    totalEl.textContent = fmtMoney(total, txCurrency);
+    totalEl.className = "tx-total " + signClass(total);
+  } else {
+    totalEl.textContent = "";
+  }
+
+  if (!txDays.length) {
+    empty.classList.remove("hidden");
+    moreBtn.classList.add("hidden");
+    return;
+  }
+  empty.classList.add("hidden");
+  renderTxPage();
+}
+
+function renderTransactions(data) {
+  txDaysAll = data.days || [];
+  txCurrency = txDaysAll[0]?.trades?.[0]?.currency || "USD";
+  applyTxFilter();
+}
+
+document.getElementById("tx-load-more").addEventListener("click", renderTxPage);
+
+document.getElementById("tx-filter").addEventListener("click", (e) => {
+  const button = e.target.closest("button[data-filter]");
+  if (!button || button.classList.contains("active")) return;
+  document.querySelectorAll("#tx-filter button").forEach((b) => b.classList.remove("active"));
+  button.classList.add("active");
+  txFilter = button.dataset.filter;
+  applyTxFilter();
+});
+
+async function tickTransactions() {
+  try {
+    const response = await fetch("/api/transactions");
+    if (!response.ok) throw new Error("HTTP " + response.status);
+    renderTransactions(await response.json());
+  } catch (err) {
+    // The headline/chart panel already reports API failures; a second
+    // identical alert here would just be noise.
+  }
+}
+
 function showFatal(message) {
   const alert = document.getElementById("alert");
   alert.textContent = message;
@@ -281,7 +539,9 @@ async function tick() {
 }
 
 tick();
+tickTransactions();
 setInterval(tick, REFRESH_MS);
+setInterval(tickTransactions, REFRESH_MS);
 </script>
 </body>
 </html>

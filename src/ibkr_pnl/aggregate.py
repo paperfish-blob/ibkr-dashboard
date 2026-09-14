@@ -6,6 +6,13 @@ Flex covers history but can also pick up part of today. Adding one to the
 other double-counts today.
 
 So: take Flex strictly before today, then add today from exactly one source.
+
+Everything summed from Flex trades uses RealizedTrade.realized_pnl (gross),
+not net_pnl. This was checked against a real account two ways: the
+whole-statement gross sum landed within $1.16 of Client Portal's own YTD
+total (fully explained by a handful of trades in the few days outside the
+fetched range), while the net sum was off by $371 -- IBKR's own "Realized
+P&L" is gross; commission is shown as a separate line, not netted in.
 """
 
 from __future__ import annotations
@@ -16,11 +23,13 @@ from itertools import groupby
 
 from .models import (
     CumulativePoint,
+    DayGroup,
     FlexResult,
     GatewayState,
     PnLResponse,
     RealizedTrade,
     TodaySource,
+    TransactionsResponse,
 )
 
 
@@ -62,6 +71,11 @@ def combine(
 
     history = [t for t in trades if t.trade_date < today]
     flex_today = [t for t in trades if t.trade_date >= today]
+    # Opening trades are now kept in flex_result.trades (for the ledger), so
+    # "is there Flex data for today" has to mean a realizing trade -- a day
+    # of opens-only would otherwise mislabel today_source as "flex" for a
+    # figure that's actually just zero the same as "none" would give.
+    flex_today_realizing = [t for t in flex_today if t.is_realizing]
 
     history_total = sum((t.realized_pnl for t in history), Decimal(0))
 
@@ -71,8 +85,8 @@ def combine(
     if gateway_state.connected and gateway_state.realized_pnl is not None:
         today_total = gateway_state.realized_pnl
         today_source = "gateway"
-    elif flex_today:
-        today_total = sum((t.realized_pnl for t in flex_today), Decimal(0))
+    elif flex_today_realizing:
+        today_total = sum((t.realized_pnl for t in flex_today_realizing), Decimal(0))
         today_source = "flex"
     else:
         today_total = Decimal(0)
@@ -97,11 +111,57 @@ def combine(
         currency=currency,
         today_source=today_source,
         series=series,
-        trade_count=len(history) + (len(flex_today) if today_source == "flex" else 0),
+        trade_count=len([t for t in history if t.is_realizing])
+        + (len(flex_today_realizing) if today_source == "flex" else 0),
         gateway=gateway_state,
         flex_ok=flex_result.ok,
         flex_error=flex_result.error,
         flex_fetched_at=flex_result.fetched_at,
         account_id=flex_result.account_id or gateway_state.account,
         currency_warning=currency_warning,
+    )
+
+
+def group_transactions(flex_result: FlexResult) -> TransactionsResponse:
+    """Group Flex trades into a per-day ledger, newest day first.
+
+    Includes every execution -- opens and closes alike -- matching IBKR's
+    own apps; the frontend's "Realized only" filter (default: off) hides
+    the opens client-side via RealizedTrade.is_realizing. total_realized and
+    each day's total_pnl are unaffected by the filter either way, since an
+    opening trade's realized_pnl is exactly 0.
+
+    This is a straight transcription of the statement -- there is no
+    Gateway/today merge here. Gateway's reqPnL gives aggregate figures only
+    (realized/unrealized/daily), never a per-trade ledger, so live trades
+    show up here once Flex's next statement includes them.
+    """
+    trades = flex_result.trades
+
+    by_day: dict = {}
+    for trade in trades:
+        by_day.setdefault(trade.trade_date, []).append(trade)
+
+    days = [
+        DayGroup(
+            date=day,
+            total_pnl=sum((t.realized_pnl for t in day_trades), Decimal(0)),
+            # Newest execution first within the day, matching the reference view.
+            trades=sorted(day_trades, key=lambda t: t.trade_time, reverse=True),
+        )
+        for day, day_trades in sorted(by_day.items(), reverse=True)
+    ]
+
+    dates = [t.trade_date for t in trades]
+
+    return TransactionsResponse(
+        total_realized=sum((t.realized_pnl for t in trades), Decimal(0)),
+        trade_count=len(trades),
+        from_date=min(dates) if dates else None,
+        to_date=max(dates) if dates else None,
+        days=days,
+        flex_ok=flex_result.ok,
+        flex_error=flex_result.error,
+        flex_fetched_at=flex_result.fetched_at,
+        account_id=flex_result.account_id,
     )

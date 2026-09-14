@@ -9,22 +9,57 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, computed_field
 
 TodaySource = Literal["gateway", "flex", "none"]
 
 
 class RealizedTrade(BaseModel):
-    """One closing execution from a Flex Activity statement."""
+    """One execution from a Flex Activity statement -- opening or closing.
+
+    An opening trade (one that opened or added to a position) carries
+    realized_pnl=0; see is_realizing. Both kinds are kept so the
+    transaction ledger can show every execution, matching IBKR's own apps.
+
+    trade_time/trade_price/trade_money/order_type/notes_codes/exchange are
+    only populated when the Flex Query includes those fields -- they default
+    to blank rather than erroring, so an older or smaller query still works.
+    """
 
     symbol: str
     trade_date: date
-    realized_pnl: Decimal
+    realized_pnl: Decimal  # fifoPnlRealized exactly as Flex reports it -- gross
     commission: Decimal = Decimal(0)
     currency: str = "USD"
     asset_category: str = ""
     quantity: Decimal = Decimal(0)
     buy_sell: str = ""
+    trade_time: str = ""  # "HH:MM:SS", local to the statement
+    trade_price: Decimal | None = None
+    trade_money: Decimal | None = None  # gross amount, price * quantity
+    order_type: str = ""
+    notes_codes: str = ""  # e.g. "O", "C", "P" -- opening/closing/partial
+    exchange: str = ""
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def net_pnl(self) -> Decimal:
+        """realized_pnl (fifoPnlRealized) after commission, for anyone who
+        wants a commission-inclusive figure. NOT what the dashboard uses for
+        its totals: checked against a real account's whole-statement total,
+        gross (realized_pnl) matched Client Portal's own YTD figure to
+        within $1.16 (explained by a few trades outside the fetched date
+        range) while net was off by $371 -- IBKR's own "Realized P&L" is
+        gross, with commission shown as a separate line, not netted in."""
+        return self.realized_pnl + self.commission
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def is_realizing(self) -> bool:
+        """False for a trade that only opened or added to a position --
+        fifoPnlRealized is exactly 0 for those. The transaction ledger's
+        "Realized only" filter is this flag."""
+        return self.realized_pnl != 0
 
 
 class FlexResult(BaseModel):
@@ -52,8 +87,30 @@ class GatewayState(BaseModel):
 
 class CumulativePoint(BaseModel):
     date: date
-    realized_pnl: Decimal  # that day's realized P&L
+    realized_pnl: Decimal  # that day's realized P&L (gross -- see net_pnl)
     cumulative: Decimal  # running total through that day
+
+
+class DayGroup(BaseModel):
+    """One day's worth of trades, for the transaction ledger view."""
+
+    date: date
+    total_pnl: Decimal  # gross -- see RealizedTrade.net_pnl
+    trades: list[RealizedTrade]
+
+
+class TransactionsResponse(BaseModel):
+    """What GET /api/transactions returns."""
+
+    total_realized: Decimal
+    trade_count: int
+    from_date: date | None
+    to_date: date | None
+    days: list[DayGroup]  # newest day first
+    flex_ok: bool
+    flex_error: str = ""
+    flex_fetched_at: datetime | None = None
+    account_id: str = ""
 
 
 class PnLResponse(BaseModel):

@@ -5,17 +5,26 @@ that the two never get added together for the same day."""
 from datetime import date
 from decimal import Decimal
 
-from ibkr_pnl.aggregate import combine
+from ibkr_pnl.aggregate import combine, group_transactions
 from ibkr_pnl.models import FlexResult, GatewayState, RealizedTrade
 
 TODAY = date(2026, 9, 11)
 
 
-def trade(day: date, amount: str, symbol: str = "AAPL", currency: str = "USD") -> RealizedTrade:
+def trade(
+    day: date,
+    amount: str,
+    symbol: str = "AAPL",
+    currency: str = "USD",
+    time: str = "",
+    commission: str = "0",
+) -> RealizedTrade:
     return RealizedTrade(
         symbol=symbol,
         trade_date=day,
+        trade_time=time,
         realized_pnl=Decimal(amount),
+        commission=Decimal(commission),
         currency=currency,
     )
 
@@ -91,6 +100,24 @@ def test_no_activity_today():
     assert result.today_source == "none"
 
 
+def test_opening_trades_today_do_not_masquerade_as_flex_data():
+    """flex_result.trades now includes opens (kept for the ledger). A day
+    that only opened positions must still read as today_source="none", not
+    "flex" -- both give today=$0, but "flex" would misleadingly claim Flex
+    had a realized figure for today when it only had opens."""
+    result = combine(
+        flex(
+            trade(date(2026, 9, 10), "1000"),
+            trade(TODAY, "0", symbol="B"),  # opened today, nothing realized
+        ),
+        GatewayState(connected=False),
+        today=TODAY,
+    )
+
+    assert result.today == Decimal("0")
+    assert result.today_source == "none"
+
+
 def test_cumulative_series_runs_and_ends_at_the_headline():
     result = combine(
         flex(
@@ -136,3 +163,110 @@ def test_flex_failure_is_carried_through_to_the_response():
     assert result.flex_ok is False
     assert "1012" in result.flex_error
     assert result.series == []
+
+
+class TestGroupTransactions:
+    """The per-trade ledger view: newest day first, newest trade within a
+    day first, each day carrying its own subtotal."""
+
+    def test_opening_trades_are_included_by_default(self):
+        """The ledger's default view is every execution, opens included --
+        the "Realized only" filter that hides them lives client-side."""
+        result = group_transactions(
+            flex(
+                trade(date(2026, 9, 10), "0", symbol="OPEN"),  # opened, no P&L yet
+                trade(date(2026, 9, 10), "250", symbol="CLOSE"),
+            )
+        )
+
+        assert result.trade_count == 2
+        symbols = {t.symbol for t in result.days[0].trades}
+        assert symbols == {"OPEN", "CLOSE"}
+        by_symbol = {t.symbol: t for t in result.days[0].trades}
+        assert by_symbol["OPEN"].is_realizing is False
+        assert by_symbol["CLOSE"].is_realizing is True
+        # The open contributes nothing to the total either way.
+        assert result.days[0].total_pnl == Decimal("250")
+        assert result.total_realized == Decimal("250")
+
+    def test_groups_by_day_newest_first(self):
+        result = group_transactions(
+            flex(
+                trade(date(2026, 9, 8), "100"),
+                trade(date(2026, 9, 10), "-40"),
+                trade(date(2026, 9, 10), "10"),
+            )
+        )
+
+        assert [d.date for d in result.days] == [date(2026, 9, 10), date(2026, 9, 8)]
+        assert result.days[0].total_pnl == Decimal("-30")
+        assert result.days[1].total_pnl == Decimal("100")
+        assert result.trade_count == 3
+        assert result.total_realized == Decimal("70")
+        assert result.from_date == date(2026, 9, 8)
+        assert result.to_date == date(2026, 9, 10)
+
+    def test_trades_within_a_day_are_newest_time_first(self):
+        result = group_transactions(
+            flex(
+                trade(date(2026, 9, 10), "10", symbol="A", time="09:00:00"),
+                trade(date(2026, 9, 10), "20", symbol="B", time="15:30:00"),
+            )
+        )
+
+        assert [t.symbol for t in result.days[0].trades] == ["B", "A"]
+
+    def test_no_gateway_merge_here_it_is_a_straight_transcription(self):
+        """Unlike combine(), the ledger has no "today" concept to reconcile
+        -- Gateway never supplies per-trade data, so there is nothing to
+        double-count against."""
+        result = group_transactions(flex(trade(TODAY, "500")))
+
+        assert result.total_realized == Decimal("500")
+        assert result.days[0].date == TODAY
+
+    def test_empty_statement(self):
+        result = group_transactions(flex())
+
+        assert result.days == []
+        assert result.trade_count == 0
+        assert result.from_date is None
+        assert result.to_date is None
+
+    def test_carries_flex_failure_through(self):
+        result = group_transactions(FlexResult(ok=False, error="Flex error 1012: Token has expired."))
+
+        assert result.flex_ok is False
+        assert "1012" in result.flex_error
+        assert result.days == []
+
+    def test_totals_are_gross_and_ignore_commission(self):
+        """fifoPnlRealized is gross. Checked against a real account: the
+        whole-statement gross sum matched Client Portal's own YTD total to
+        within a few dollars (explained by trades outside the fetched date
+        range), while netting out commission was off by hundreds -- IBKR's
+        own figure is gross, with commission shown as a separate line."""
+        result = group_transactions(
+            flex(
+                trade(date(2026, 9, 10), "250.00", commission="-1.00"),
+                trade(date(2026, 9, 10), "-75.50", symbol="B", commission="-1.00"),
+            )
+        )
+
+        assert result.days[0].total_pnl == Decimal("174.50")  # 250 + (-75.5), commission ignored
+        assert result.total_realized == Decimal("174.50")
+
+
+class TestCombineIsAlsoGrossAndIgnoresCommission:
+    def test_history_and_today_totals_ignore_commission(self):
+        result = combine(
+            flex(
+                trade(date(2026, 9, 10), "1000", commission="-2.00"),
+                trade(TODAY, "300", commission="-1.00"),
+            ),
+            GatewayState(connected=False),
+            today=TODAY,
+        )
+
+        assert result.headline == Decimal("1300")  # 1000 + 300, commission ignored
+        assert result.today == Decimal("300")

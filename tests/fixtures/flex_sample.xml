@@ -3,7 +3,7 @@
 <FlexStatements count="1">
 <FlexStatement accountId="U0000000" fromDate="20260101" toDate="20260910" period="YearToDate" whenGenerated="20260911;120000">
 <Trades>
-<Trade accountId="U0000000" symbol="AAPL" tradeDate="20260105" quantity="-100" buySell="SELL" currency="USD" assetCategory="STK" ibCommission="-1.00" fifoPnlRealized="250.00" levelOfDetail="EXECUTION" />
+<Trade accountId="U0000000" symbol="AAPL" tradeDate="20260105" dateTime="20260105;093015" quantity="-100" buySell="SELL" currency="USD" assetCategory="STK" ibCommission="-1.00" fifoPnlRealized="250.00" levelOfDetail="EXECUTION" tradePrice="227.50" tradeMoney="22750.00" orderType="LMT" notes="C" exchange="SMART" />
 <Trade accountId="U0000000" symbol="NVDA" tradeDate="20260105" quantity="-50" buySell="SELL" currency="USD" assetCategory="STK" ibCommission="-1.00" fifoPnlRealized="-75.50" levelOfDetail="EXECUTION" />
 <Trade accountId="U0000000" symbol="MSFT" tradeDate="20260220" quantity="100" buySell="BUY" currency="USD" assetCategory="STK" ibCommission="-1.00" fifoPnlRealized="0" levelOfDetail="EXECUTION" />
 <Trade accountId="U0000000" symbol="TSLA" tradeDate="20260312" quantity="-25" buySell="SELL" currency="USD" assetCategory="STK" ibCommission="-1.05" fifoPnlRealized="410.25" levelOfDetail="EXECUTION" />

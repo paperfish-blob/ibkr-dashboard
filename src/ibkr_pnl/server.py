@@ -12,7 +12,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import aggregate, cache
 from .config import settings
-from .models import PnLResponse
+from .models import PnLResponse, TransactionsResponse
 from .sources.gateway import monitor
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -38,6 +38,14 @@ async def get_pnl(refresh: bool = Query(False, description="Bypass the Flex cach
     Gateway just means today's figure falls back to Flex."""
     flex_result = await cache.get_flex(force_refresh=refresh)
     return aggregate.combine(flex_result, monitor.state)
+
+
+@app.get("/api/transactions", response_model=TransactionsResponse)
+async def get_transactions(refresh: bool = Query(False, description="Bypass the Flex cache")):
+    """Per-trade ledger, newest day first. Sourced from Flex alone -- see
+    aggregate.group_transactions for why Gateway has nothing to add here."""
+    flex_result = await cache.get_flex(force_refresh=refresh)
+    return aggregate.group_transactions(flex_result)
 
 
 @app.get("/api/health")

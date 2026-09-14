@@ -58,6 +58,28 @@ def _decimal(raw: str | None) -> Decimal:
         return Decimal(0)
 
 
+def _decimal_or_none(raw: str | None) -> Decimal | None:
+    """Like _decimal, but a missing field stays None rather than reading as a
+    real zero -- there is no such thing as a trade at price 0."""
+    if raw is None or raw.strip() == "":
+        return None
+    try:
+        return Decimal(raw.strip())
+    except InvalidOperation:
+        return None
+
+
+def _first(node: ET.Element, *names: str) -> str | None:
+    """First present attribute among a few candidate names. Some fields have
+    shifted names across Flex versions/field lists; this tolerates that
+    without guessing silently -- see the field-name note in --dump."""
+    for name in names:
+        value = node.get(name)
+        if value is not None and value.strip() != "":
+            return value.strip()
+    return None
+
+
 def _parse_date(raw: str | None) -> date | None:
     """tradeDate format follows the query's own date-format setting."""
     if not raw:
@@ -69,6 +91,19 @@ def _parse_date(raw: str | None) -> date | None:
         except ValueError:
             continue
     return None
+
+
+def _parse_time(raw: str | None) -> str:
+    """dateTime is typically "yyyyMMdd;HHmmss" -- pull the HH:MM:SS half."""
+    if not raw or ";" not in raw:
+        return ""
+    time_part = raw.strip().split(";", 1)[1].strip()
+    for fmt in ("%H%M%S", "%H:%M:%S"):
+        try:
+            return datetime.strptime(time_part, fmt).strftime("%H:%M:%S")
+        except ValueError:
+            continue
+    return ""
 
 
 def _check_envelope(xml_text: str) -> ET.Element:
@@ -103,10 +138,13 @@ def _select_level(trade_nodes: list[ET.Element]) -> list[ET.Element]:
 
 
 def parse_statement(xml_text: str) -> FlexResult:
-    """Parse a Flex Activity statement into realized trades.
+    """Parse a Flex Activity statement into trades.
 
-    Rows with no realized P&L (opening trades) are dropped -- they carry
-    fifoPnlRealized="0" and would only add noise to the series.
+    Every execution is kept, opens included -- an opening trade carries
+    fifoPnlRealized="0" (RealizedTrade.is_realizing is False for these).
+    Totals are unaffected either way since a zero contributes nothing to a
+    sum; this only matters for trade_count and for the transaction ledger,
+    which defaults to showing every execution the way IBKR's own apps do.
     """
     root = _check_envelope(xml_text)
 
@@ -119,12 +157,11 @@ def parse_statement(xml_text: str) -> FlexResult:
 
     trades: list[RealizedTrade] = []
     for node in nodes:
-        trade_date = _parse_date(node.get("tradeDate") or node.get("dateTime"))
+        date_time_raw = node.get("dateTime")
+        trade_date = _parse_date(node.get("tradeDate") or date_time_raw)
         if trade_date is None:
             continue
         realized = _decimal(node.get("fifoPnlRealized"))
-        if realized == 0:
-            continue
         trades.append(
             RealizedTrade(
                 symbol=(node.get("symbol") or "").strip(),
@@ -135,10 +172,16 @@ def parse_statement(xml_text: str) -> FlexResult:
                 asset_category=(node.get("assetCategory") or "").strip(),
                 quantity=_decimal(node.get("quantity")),
                 buy_sell=(node.get("buySell") or "").strip(),
+                trade_time=_parse_time(date_time_raw),
+                trade_price=_decimal_or_none(node.get("tradePrice")),
+                trade_money=_decimal_or_none(node.get("tradeMoney")),
+                order_type=(_first(node, "orderType") or "").strip(),
+                notes_codes=(_first(node, "notes", "codes") or "").strip(),
+                exchange=(_first(node, "exchange", "listingExchange") or "").strip(),
             )
         )
 
-    trades.sort(key=lambda t: t.trade_date)
+    trades.sort(key=lambda t: (t.trade_date, t.trade_time))
     return FlexResult(
         ok=True,
         trades=trades,
@@ -221,15 +264,32 @@ async def _dump() -> None:
     result = parse_statement(xml_text)
     total = sum((t.realized_pnl for t in result.trades), Decimal(0))
     commissions = sum((t.commission for t in result.trades), Decimal(0))
+    net = sum((t.net_pnl for t in result.trades), Decimal(0))
     currencies = sorted({t.currency for t in result.trades})
     print(f"account:            {result.account_id}")
     print(f"realizing trades:   {len(result.trades)}")
     print(f"currencies:         {', '.join(currencies) or '-'}")
-    print(f"sum fifoPnlRealized {total}")
+    print(f"sum fifoPnlRealized {total}   (what the dashboard shows)")
     print(f"sum ibCommission    {commissions}")
-    print(f"sum net             {total + commissions}")
-    print("\nCompare these against Client Portal's own realized P&L to")
-    print("settle whether fifoPnlRealized is already net of commission.")
+    print(f"sum net             {net}   (commission-inclusive; informational only)")
+    print("\nCompare 'sum fifoPnlRealized' against Client Portal's own realized")
+    print("P&L. Checked against a real account: gross matched Client Portal's")
+    print("own total to within a few dollars (explained by trades in the days")
+    print("outside this fetch's date range), while net was off by hundreds --")
+    print("IBKR's own figure is gross; commission is a separate line item.")
+
+    # Raw attributes of the first couple of <Trade> nodes -- this is what
+    # settles whether the field-name guesses in parse_statement (tradeMoney,
+    # orderType, notes/codes, exchange) actually match this account's export
+    # before the transaction ledger is trusted.
+    root = ET.fromstring(xml_text.strip())
+    raw_nodes = root.findall(".//Trade")[:2]
+    if raw_nodes:
+        print(f"\nraw attributes of the first {len(raw_nodes)} <Trade> node(s):")
+        for node in raw_nodes:
+            for key, value in sorted(node.attrib.items()):
+                print(f"  {key:<20} {value}")
+            print()
 
 
 if __name__ == "__main__":
