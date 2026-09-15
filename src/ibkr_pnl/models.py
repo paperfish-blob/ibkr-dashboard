@@ -111,6 +111,8 @@ class TransactionsResponse(BaseModel):
     flex_error: str = ""
     flex_fetched_at: datetime | None = None
     account_id: str = ""
+    period: str = "all"
+    years_covered: list[int] = []
 
 
 class PnLResponse(BaseModel):
@@ -130,3 +132,8 @@ class PnLResponse(BaseModel):
     # Set when the statement spans more than one currency; summing across
     # currencies would be meaningless, so we say so instead of guessing at FX.
     currency_warning: str = ""
+    # Which calendar years this figure actually covers. "All" only merges the
+    # years already downloaded, so the UI must be able to say so rather than
+    # present a partial multi-year total as a complete one.
+    period: str = "all"
+    years_covered: list[int] = []

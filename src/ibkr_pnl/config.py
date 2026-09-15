@@ -1,5 +1,6 @@
 """Settings, loaded from .env."""
 
+from datetime import date
 from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -24,6 +25,22 @@ class Settings(BaseSettings):
     flex_cache_ttl_seconds: int = 900
     cache_dir: Path = PROJECT_ROOT / ".cache"
 
+    # Calendar years of history offered on the History page, in addition to the
+    # current one. IBKR keeps the four previous calendar years plus the current,
+    # so 4 is the most it can serve -- asking for more just yields empty years.
+    flex_history_years: int = 4
+
+    # A year that has only just closed is not safe to treat as immutable: Flex
+    # lags settlement by a day or two, so its final trades may not have landed
+    # yet. Freezing it then would lose them permanently.
+    year_immutable_after_days: int = 7
+
+    # How long to leave a failed year alone before trying it again. Failures
+    # are never cached to disk, so without this the 30s dashboard poll would
+    # retry a broken year forever -- and against a 10/minute token, those
+    # retries are what keep IBKR throttling. Explicit downloads ignore it.
+    flex_failure_cooldown_seconds: int = 90
+
     # --- IB Gateway (today's live realized P&L) ---
     ib_host: str = "127.0.0.1"
     ib_port: int = 4001  # 4001 live, 4002 paper
@@ -36,6 +53,12 @@ class Settings(BaseSettings):
     @property
     def flex_configured(self) -> bool:
         return bool(self.flex_token and self.flex_query_id)
+
+    def history_years(self, today: date | None = None) -> list[int]:
+        """Reachable calendar years, newest first. Derived from the current
+        year rather than hardcoded, so this keeps working next January."""
+        current = (today or date.today()).year
+        return [current - offset for offset in range(self.flex_history_years + 1)]
 
 
 settings = Settings()

@@ -5,6 +5,7 @@
   import TransactionLedger from "$lib/components/TransactionLedger.svelte";
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
   import AlertBar from "$lib/components/AlertBar.svelte";
+  import PeriodPicker from "$lib/components/PeriodPicker.svelte";
   import { fmtDay, fmtMoney, num, toneOf } from "$lib/format";
   import {
     transactions,
@@ -31,7 +32,7 @@
   async function handleRefresh() {
     refreshing = true;
     try {
-      await refreshTransactions(true);
+      await refreshTransactions();
     } finally {
       refreshing = false;
     }
@@ -63,6 +64,7 @@
         </span>
         <span class="total {toneOf(total)}">{fmtMoney(total, currency)}</span>
       {/if}
+      <PeriodPicker />
       <SegToggle
         options={FILTERS}
         active={$txFilter}

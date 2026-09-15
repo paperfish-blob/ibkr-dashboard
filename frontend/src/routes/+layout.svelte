@@ -7,6 +7,7 @@
   const nav = [
     { href: "/", label: "Overview" },
     { href: "/transactions", label: "Transactions" },
+    { href: "/history", label: "History" },
   ];
 
   const current = $derived($page.url.pathname);
@@ -24,9 +25,14 @@
                 <path d="M2 12l4-5 3 3 5-6" />
                 <path d="M2 14h12" />
               </svg>
-            {:else}
+            {:else if item.href === "/transactions"}
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M2 4h12M2 8h12M2 12h8" />
+              </svg>
+            {:else}
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M8 2c3.3 0 6 1 6 2.2S11.3 6.5 8 6.5 2 5.4 2 4.2 4.7 2 8 2z" />
+                <path d="M2 4.2v7.6C2 13 4.7 14 8 14s6-1 6-2.2V4.2M2 8c0 1.2 2.7 2.2 6 2.2s6-1 6-2.2" />
               </svg>
             {/if}
             {item.label}

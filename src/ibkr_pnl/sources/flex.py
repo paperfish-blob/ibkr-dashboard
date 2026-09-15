@@ -190,13 +190,32 @@ def parse_statement(xml_text: str) -> FlexResult:
     )
 
 
-async def fetch_statement_xml(config: Settings | None = None) -> str:
-    """Run the two-call protocol and return the raw statement XML."""
+async def fetch_statement_xml(
+    config: Settings | None = None,
+    window: tuple[date, date] | None = None,
+) -> str:
+    """Run the two-call protocol and return the raw statement XML.
+
+    `window` overrides the saved query's own date range via the fd/td request
+    parameters (yyyymmdd, at most 365 days apart, given together). Verified
+    against a real account: a query saved as "Year to Date" returned
+    fromDate=20250101 toDate=20251231 period="" when asked for 2025, so the
+    override wins and clears the saved period.
+    """
     config = config or settings
     if not config.flex_configured:
         raise FlexError("FLEX_TOKEN and FLEX_QUERY_ID are not set in .env")
 
     params = {"t": config.flex_token, "q": config.flex_query_id, "v": "3"}
+    if window is not None:
+        start, end = window
+        if (end - start).days > 365:
+            raise FlexError(
+                f"Flex allows at most 365 days per request; {start}..{end} is "
+                f"{(end - start).days}"
+            )
+        params["fd"] = start.strftime("%Y%m%d")
+        params["td"] = end.strftime("%Y%m%d")
 
     async with httpx.AsyncClient(timeout=60.0, headers=HEADERS) as client:
         response = await client.get(SEND_REQUEST_URL, params=params)
@@ -233,10 +252,13 @@ async def fetch_statement_xml(config: Settings | None = None) -> str:
         )
 
 
-async def fetch(config: Settings | None = None) -> FlexResult:
+async def fetch(
+    config: Settings | None = None,
+    window: tuple[date, date] | None = None,
+) -> FlexResult:
     """Fetch and parse, turning failures into a FlexResult we can render."""
     try:
-        return parse_statement(await fetch_statement_xml(config))
+        return parse_statement(await fetch_statement_xml(config, window))
     except (FlexError, httpx.HTTPError) as exc:
         return FlexResult(ok=False, error=str(exc), fetched_at=datetime.now())
 

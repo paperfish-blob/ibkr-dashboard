@@ -79,6 +79,10 @@ export interface PnLResponse {
   flex_fetched_at: IsoDateTime | null;
   account_id: string;
   currency_warning: string;
+  period: string;
+  /** Which years this figure actually covers -- "all" merges only the years
+   *  already downloaded, so a partial total must never look complete. */
+  years_covered: number[];
 }
 
 export interface TransactionsResponse {
@@ -92,6 +96,31 @@ export interface TransactionsResponse {
   flex_error: string;
   flex_fetched_at: IsoDateTime | null;
   account_id: string;
+  period: string;
+  years_covered: number[];
+}
+
+export type YearState = "missing" | "downloading" | "stored" | "error";
+
+export interface YearStatus {
+  year: number;
+  state: YearState;
+  trade_count: number;
+  realizing_count: number;
+  realized_pnl: DecimalString;
+  currency: string;
+  downloaded_at: IsoDateTime | null;
+  error: string;
+  is_current: boolean;
+  /** A closed, settled year: downloaded once, never re-fetched. */
+  immutable: boolean;
+  started_at: IsoDateTime | null;
+}
+
+export interface HistoryStatus {
+  years: YearStatus[];
+  /** The year currently downloading, if any. Only one runs at a time. */
+  downloading: number | null;
 }
 
 const BASE = "";
@@ -102,11 +131,23 @@ async function get<T>(path: string): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-/** `refresh` bypasses the backend's 15-minute Flex cache. The Flex token is
- *  rate limited (1 req/s, 10/min), so only pass it on an explicit user action. */
+async function post<T>(path: string): Promise<T> {
+  const res = await fetch(`${BASE}${path}`, { method: "POST" });
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText} — ${path}`);
+  return res.json() as Promise<T>;
+}
+
+/** `period` is "all" or a four-digit year. The Flex token is rate limited
+ *  (1 req/s, 10/min), so the backend caches aggressively and refuses
+ *  concurrent downloads -- see downloadYear's `started` flag. */
 export const api = {
-  pnl: (refresh = false): Promise<PnLResponse> =>
-    get<PnLResponse>(`/api/pnl${refresh ? "?refresh=true" : ""}`),
-  transactions: (refresh = false): Promise<TransactionsResponse> =>
-    get<TransactionsResponse>(`/api/transactions${refresh ? "?refresh=true" : ""}`),
+  pnl: (period = "all"): Promise<PnLResponse> =>
+    get<PnLResponse>(`/api/pnl?period=${encodeURIComponent(period)}`),
+  transactions: (period = "all"): Promise<TransactionsResponse> =>
+    get<TransactionsResponse>(`/api/transactions?period=${encodeURIComponent(period)}`),
+  history: (): Promise<HistoryStatus> => get<HistoryStatus>("/api/history"),
+  /** `started` is false when a download is already running -- only one runs
+   *  at a time, and the message says which year holds the slot. */
+  downloadYear: (year: number): Promise<{ started: boolean; message: string }> =>
+    post<{ started: boolean; message: string }>(`/api/history/${year}`),
 };

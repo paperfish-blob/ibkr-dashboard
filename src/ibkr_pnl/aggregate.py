@@ -79,7 +79,15 @@ def combine(
     flex_result: FlexResult,
     gateway_state: GatewayState,
     today: date | None = None,
+    covers_today: bool = True,
 ) -> PnLResponse:
+    """Merge a Flex statement with Gateway's live figure.
+
+    `covers_today` is False when the selected period is a past year. Such a
+    window has no "today" to merge at all: Gateway reports P&L realized *now*,
+    which belongs to the current year and would be pure contamination added to
+    a 2024 total.
+    """
     today = today or date.today()
     trades = flex_result.trades
 
@@ -96,7 +104,10 @@ def combine(
     # Today comes from exactly one source. Gateway wins when connected and
     # actually reporting a value -- it is live, where Flex is end-of-day.
     today_source: TodaySource
-    if gateway_state.connected and gateway_state.realized_pnl is not None:
+    if not covers_today:
+        today_total = Decimal(0)
+        today_source = "none"
+    elif gateway_state.connected and gateway_state.realized_pnl is not None:
         today_total = gateway_state.realized_pnl
         today_source = "gateway"
     elif flex_today_realizing:
@@ -107,7 +118,10 @@ def combine(
         today_source = "none"
 
     series = _build_series(history)
-    if today_source != "none" or series:
+    # Only anchor the series to today when today is actually in the window.
+    # A 2024 view would otherwise gain a point dated now, stretching its chart
+    # across two empty years to a date the period does not contain.
+    if covers_today and (today_source != "none" or series):
         running = series[-1].cumulative if series else Decimal(0)
         series.append(
             CumulativePoint(

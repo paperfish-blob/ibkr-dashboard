@@ -113,6 +113,35 @@ headline = sum(history) + today
 ```
 
 The API reports which one it used as `today_source`, and the page shows it.
+Selecting a past year sets it to `none`: Gateway reports P&L realized *now*,
+which belongs to the current year and would be contamination in a 2024 total.
+
+## Past years
+
+The **History** page downloads prior calendar years. IBKR serves the four
+previous years plus the current one, and the saved Flex Query is re-pointed at
+each window at request time via the `fd`/`td` parameters — so **one query
+covers every year** and nothing needs configuring in Client Portal.
+
+A year is downloaded once and kept. A closed year can never change, so it is
+never re-fetched; only the current year keeps a TTL. Once downloaded, a year
+appears in the period selector on Overview and Transactions.
+
+Two details that are easy to get wrong:
+
+- **The current year's window ends today, not Dec 31.** IBKR rejects a window
+  ending in the future with `error 1001: Statement could not be generated at
+  this time`, which reads exactly like throttling and is not.
+- **Failures back off, doubling.** IBKR answers a burst with error 1001 and
+  answers persistence with `error 1025: Too many failed attempts` — a lockout
+  that further attempts keep alive. A failed year is therefore left alone for
+  90s, then 3min, 6min, and so on up to 30 minutes. Pressing Download always
+  tries immediately regardless; only the automatic path backs off.
+
+Downloads run **one at a time** — a year costs up to 6 requests against a
+token limited to 10/minute, and takes 10–40s. A second request while one is
+running is refused with `{"started": false}` and a message saying which year
+holds the slot.
 
 ## Verifying the numbers
 
@@ -157,7 +186,8 @@ src/ibkr_pnl/
   models.py           shared data model
   sources/flex.py     SendRequest -> poll GetStatement -> parse
   sources/gateway.py  persistent ib_async connection, reqPnL subscription
-  cache.py            disk cache (the Flex token is rate limited)
+  cache.py            per-year disk cache + failure backoff
+  history.py          per-year downloads, one at a time
   aggregate.py        merges both sources
   server.py           FastAPI: /api/*, plus serving the frontend build
   static/index.html   fallback dashboard, used when frontend/build is absent
@@ -166,6 +196,7 @@ frontend/
   src/app.css                     design tokens (shared with ui-reference)
   src/routes/+page.svelte         Overview: headline + cumulative chart
   src/routes/transactions/        the per-trade ledger
+  src/routes/history/             download past years
   src/lib/api.ts                  typed client; Decimals arrive as strings
   src/lib/format.ts               money/date formatters, tone helper
   src/lib/stores.ts               data stores + persisted filter preference

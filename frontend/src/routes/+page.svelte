@@ -6,15 +6,23 @@
   import StatusBadges from "$lib/components/StatusBadges.svelte";
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
   import AlertBar from "$lib/components/AlertBar.svelte";
+  import PeriodPicker from "$lib/components/PeriodPicker.svelte";
   import { pnl, pnlLoading, pnlError, refreshPnL } from "$lib/stores";
 
   const POLL_MS = 30_000;
   let refreshing = $state(false);
 
+  // "All" merges only the years already downloaded, so it has to say which.
+  const coverage = $derived.by(() => {
+    const years = $pnl?.years_covered ?? [];
+    if ($pnl?.period !== "all" || years.length <= 1) return null;
+    return `Covering ${years.slice().sort().join(", ")} — add more on the History page.`;
+  });
+
   async function handleRefresh() {
     refreshing = true;
     try {
-      await refreshPnL(true);
+      await refreshPnL();
     } finally {
       refreshing = false;
     }
@@ -38,6 +46,7 @@
     {refreshing}
   >
     {#snippet right()}
+      <PeriodPicker />
       {#if $pnl}
         <StatusBadges
           gateway={$pnl.gateway}
@@ -51,6 +60,10 @@
   </PageHeader>
 
   <AlertBar messages={[$pnlError, $pnl?.flex_error, $pnl?.currency_warning]} />
+
+  {#if coverage}
+    <div class="coverage">{coverage}</div>
+  {/if}
 
   {#if $pnlLoading && !$pnl}
     <SkeletonCard height={168} rows={2} />
@@ -74,6 +87,11 @@
   }
   .gap {
     height: 24px;
+  }
+  .coverage {
+    font-size: var(--text-xs);
+    color: var(--dim-55);
+    margin-bottom: 12px;
   }
   .panel-empty {
     padding: 40px 18px;

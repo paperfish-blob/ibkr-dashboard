@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import date
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -12,6 +13,7 @@ from fastapi.staticfiles import StaticFiles
 
 from . import aggregate, cache
 from .config import PROJECT_ROOT, settings
+from .history import HistoryStatus, manager
 from .models import PnLResponse, TransactionsResponse
 from .sources.gateway import monitor
 
@@ -28,34 +30,63 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await monitor.stop()
+        await manager.stop()
 
 
 app = FastAPI(title="IBKR Realized P&L", lifespan=lifespan)
 
 
+PERIOD_QUERY = Query(
+    "all", description='"all" for every downloaded year, or a year like "2025"'
+)
+
+
 @app.get("/api/pnl", response_model=PnLResponse)
-async def get_pnl(refresh: bool = Query(False, description="Bypass the Flex cache")):
-    """Realized P&L. Never fails because IB Gateway is down -- a missing
-    Gateway just means today's figure falls back to Flex."""
-    flex_result = await cache.get_flex(force_refresh=refresh)
-    return aggregate.combine(flex_result, monitor.state)
+async def get_pnl(period: str = PERIOD_QUERY):
+    """Realized P&L for a period. Never fails because IB Gateway is down -- a
+    missing Gateway just means today's figure falls back to Flex."""
+    flex_result, years = await cache.get_period(period)
+    # Gateway reports P&L realized right now, which belongs to the current
+    # year. Merging it into a past year would be contamination.
+    covers_today = period == "all" or period == str(date.today().year)
+    response = aggregate.combine(flex_result, monitor.state, covers_today=covers_today)
+    return response.model_copy(update={"period": period, "years_covered": years})
 
 
 @app.get("/api/transactions", response_model=TransactionsResponse)
-async def get_transactions(refresh: bool = Query(False, description="Bypass the Flex cache")):
+async def get_transactions(period: str = PERIOD_QUERY):
     """Per-trade ledger, newest day first. Sourced from Flex alone -- see
     aggregate.group_transactions for why Gateway has nothing to add here."""
-    flex_result = await cache.get_flex(force_refresh=refresh)
-    return aggregate.group_transactions(flex_result)
+    flex_result, years = await cache.get_period(period)
+    response = aggregate.group_transactions(flex_result)
+    return response.model_copy(update={"period": period, "years_covered": years})
+
+
+@app.get("/api/history", response_model=HistoryStatus)
+async def get_history():
+    """Per-year download state for the History page."""
+    return manager.status()
+
+
+@app.post("/api/history/{year}")
+async def download_year(year: int):
+    """Start downloading one year's statement.
+
+    Returns immediately: a statement takes 10-40s to generate, too long to
+    hold an HTTP request open for. The page polls /api/history meanwhile.
+    """
+    started, message = manager.start(year)
+    return {"started": started, "message": message}
 
 
 @app.get("/api/health")
 async def health():
-    cached = cache.read_cached()
+    current = cache.read_cached(date.today().year)
     return {
         "gateway_connected": monitor.state.connected,
         "flex_configured": settings.flex_configured,
-        "flex_cached_at": cached.fetched_at if cached else None,
+        "flex_cached_at": current.fetched_at if current else None,
+        "years_downloaded": cache.cached_years(),
     }
 
 
