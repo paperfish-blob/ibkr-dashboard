@@ -48,6 +48,37 @@
     const sign = buySell.toUpperCase() === "SELL" ? -1 : 1;
     return sign * num(price) * num(quantity);
   }
+
+  interface Row {
+    p: Position;
+    i: number;
+  }
+  interface DayGroup {
+    date: string;
+    rows: Row[];
+  }
+
+  /** Day bands, same as the ledger's -- grouped by exit date, or open date
+   *  for a position that hasn't closed anything yet. `positions` already
+   *  arrives most-recent-activity-first, so consecutive same-day positions
+   *  are already adjacent; this only has to notice the boundaries. Indexes
+   *  are assigned before grouping so expand/collapse state (keyed by index)
+   *  stays unique across groups. */
+  const displayGroups = $derived.by(() => {
+    const groups: DayGroup[] = [];
+    positions.forEach((p, i) => {
+      const date = p.exit_date ?? p.open_date ?? "";
+      const last = groups.at(-1);
+      if (last && last.date === date) last.rows.push({ p, i });
+      else groups.push({ date, rows: [{ p, i }] });
+    });
+    return groups;
+  });
+
+  /** Symbol, Side, Qty + Price/Amount/Comm./Order ID + Realized P&L etc. */
+  const totalCols = 14;
+  /** The day band spans everything left of its count and total cells. */
+  const dayRowSpan = totalCols - 2;
 </script>
 
 <div class="panel">
@@ -75,7 +106,15 @@
           </tr>
         </thead>
         <tbody>
-          {#each positions as p, i (p.symbol + (p.open_date ?? "") + p.open_time + (p.exit_date ?? "") + p.direction + i)}
+          {#each displayGroups as group (group.date + group.rows[0].i)}
+            {@const groupTotal = group.rows.reduce((sum, { p }) => sum + (p.realized_pnl === null ? 0 : num(p.realized_pnl)), 0)}
+            <tr class="day-row">
+              <td class="day-date" colspan={dayRowSpan}>{group.date ? fmtFullDate(group.date) : EM_DASH}</td>
+              <td class="day-count num">{group.rows.length}</td>
+              <td class="day-total num {toneOf(groupTotal)}">{fmtMoney(groupTotal, currency)}</td>
+            </tr>
+
+          {#each group.rows as { p, i } (p.symbol + (p.open_date ?? "") + p.open_time + (p.exit_date ?? "") + p.direction + i)}
             {@const canExpand = p.exit_legs.length > 0}
             {@const isExpanded = expanded.has(i)}
             {@const entryAmount = amount(p.entry_price, p.quantity, p.direction === "short" ? "SELL" : "BUY")}
@@ -140,6 +179,7 @@
                 </tr>
               {/each}
             {/if}
+          {/each}
           {/each}
         </tbody>
       </table>
@@ -216,6 +256,32 @@
   }
   td.full-date.dash {
     color: var(--dim-35);
+  }
+
+  /* Day group header: a full-width band carrying the date and that day's net. */
+  .day-row td {
+    background: var(--surface-04);
+    border-bottom: 1px solid var(--border-08);
+    padding-top: 9px;
+    padding-bottom: 9px;
+  }
+  tbody tr.day-row:hover td {
+    background: var(--surface-04);
+  }
+  .day-date {
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim-70);
+  }
+  .day-count {
+    font-size: var(--text-2xs);
+    color: var(--dim-45);
+  }
+  .day-total {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
   }
 
   tr.pos-row {
