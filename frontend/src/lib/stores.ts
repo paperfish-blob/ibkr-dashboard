@@ -84,6 +84,11 @@ export const txFilter = persisted<TxFilter>("ibkr.tx.filter", "all");
  *  nothing rather than erroring, same as any other empty-result state. */
 export const txSymbols = persisted<string[]>("ibkr.tx.symbols", []);
 
+/** Collapse an order's partial fills into one ledger row. Off by default --
+ *  it changes numbers people are used to reading per-execution (price,
+ *  time), so it should be an opt-in rather than a surprise on load. */
+export const txGroupFills = persisted<boolean>("ibkr.tx.groupFills", false);
+
 /** Selected period: "all" or a four-digit year. Shared by Overview and
  *  Transactions so the choice follows you between them. Defaults to "all" so
  *  a freshly downloaded year shows up without anyone hunting for a setting. */

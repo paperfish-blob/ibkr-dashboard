@@ -7,17 +7,71 @@
    * rendering an empty header. Day and grand totals are the same across all
    * three filters -- an opening trade's realized_pnl is exactly 0 -- so only
    * the counts move.
+   *
+   * groupFills collapses same-order executions into one row afterwards --
+   * it changes what's rendered, not what's counted; the day header's count
+   * and total, and the eyebrow's trade count, still reflect every execution.
    */
   import { fmtFullDate, fmtMoney, fmtPriceLike, fmtQty, num, toneOf, EM_DASH } from "$lib/format";
-  import type { DayGroup } from "$lib/api";
+  import type { DayGroup, RealizedTrade } from "$lib/api";
   import type { TxFilter } from "$lib/stores";
 
   interface Props {
     days: DayGroup[];
     filter: TxFilter;
+    groupFills?: boolean;
     currency?: string;
   }
-  let { days, filter, currency = "USD" }: Props = $props();
+  let { days, filter, groupFills = false, currency = "USD" }: Props = $props();
+
+  type LedgerRow = RealizedTrade & { fillCount: number };
+
+  /** Collapse the fills of one order (same ib_order_id) into a single row:
+   *  quantity/commission/P&L sum, price is the quantity-weighted average, and
+   *  the row is realizing if any fill closed part of a position. Trades from
+   *  a Flex Query without IB Order ID (ib_order_id === "") never group --
+   *  each stays its own row, same as before this existed. */
+  function groupOrders(trades: RealizedTrade[]): LedgerRow[] {
+    const byOrder = new Map<string, RealizedTrade[]>();
+    const rows: LedgerRow[] = [];
+    for (const t of trades) {
+      if (!t.ib_order_id) {
+        rows.push({ ...t, fillCount: 1 });
+        continue;
+      }
+      const fills = byOrder.get(t.ib_order_id);
+      if (fills) fills.push(t);
+      else byOrder.set(t.ib_order_id, [t]);
+    }
+    for (const fills of byOrder.values()) {
+      rows.push(fills.length === 1 ? { ...fills[0], fillCount: 1 } : aggregateFills(fills));
+    }
+    return rows.sort((a, b) => a.trade_time.localeCompare(b.trade_time));
+  }
+
+  function aggregateFills(fills: RealizedTrade[]): LedgerRow {
+    const first = fills[0];
+    const quantity = fills.reduce((s, f) => s + num(f.quantity), 0);
+    const hasPrice = fills.every((f) => f.trade_price !== null);
+    const hasMoney = fills.every((f) => f.trade_money !== null);
+    const weightedPrice = hasPrice
+      ? fills.reduce((s, f) => s + num(f.trade_price) * Math.abs(num(f.quantity)), 0) /
+        (Math.abs(quantity) || 1)
+      : null;
+    const earliestTime = fills.reduce((min, f) => (!min || (f.trade_time && f.trade_time < min) ? f.trade_time : min), "");
+    return {
+      ...first,
+      quantity: String(quantity),
+      commission: String(fills.reduce((s, f) => s + num(f.commission), 0)),
+      realized_pnl: String(fills.reduce((s, f) => s + num(f.realized_pnl), 0)),
+      net_pnl: String(fills.reduce((s, f) => s + num(f.net_pnl), 0)),
+      trade_money: hasMoney ? String(fills.reduce((s, f) => s + num(f.trade_money), 0)) : null,
+      trade_price: weightedPrice === null ? null : String(weightedPrice),
+      trade_time: earliestTime,
+      is_realizing: fills.some((f) => f.is_realizing),
+      fillCount: fills.length,
+    };
+  }
 
   const visible = $derived(
     filter === "all"
@@ -28,6 +82,13 @@
             trades: d.trades.filter((t) => (filter === "realized" ? t.is_realizing : !t.is_realizing)),
           }))
           .filter((d) => d.trades.length > 0),
+  );
+
+  const displayDays = $derived(
+    visible.map((d) => ({
+      ...d,
+      rows: groupFills ? groupOrders(d.trades) : (d.trades.map((t) => ({ ...t, fillCount: 1 })) as LedgerRow[]),
+    })),
   );
 
   const tradeCount = $derived(visible.reduce((n, d) => n + d.trades.length, 0));
@@ -44,6 +105,7 @@
       amount: all.some((t) => t.trade_money !== null),
       commission: all.some((t) => num(t.commission) !== 0),
       time: all.some((t) => t.trade_time !== ""),
+      orderId: all.some((t) => t.ib_order_id !== ""),
     };
   });
   const optionalCols = $derived(Object.values(cols).filter(Boolean).length);
@@ -52,6 +114,7 @@
     amount: "Trade Money",
     commission: "IB Commission",
     time: "Date/Time",
+    orderId: "IB Order ID",
   };
   const missingFields = $derived(
     Object.entries(cols)
@@ -111,11 +174,12 @@
             {#if cols.amount}<th class="num">Amount</th>{/if}
             {#if cols.commission}<th class="num">Comm.</th>{/if}
             {#if cols.time}<th class="num">Time</th>{/if}
+            {#if cols.orderId}<th class="num">Order ID</th>{/if}
             <th class="num">Realized P&amp;L</th>
           </tr>
         </thead>
         <tbody>
-          {#each visible as day (day.date)}
+          {#each displayDays as day (day.date)}
             {@const dayTone = toneOf(num(day.total_pnl))}
             <tr class="day-row">
               <td class="day-date" colspan={dayRowSpan}>{fmtFullDate(day.date)}</td>
@@ -123,7 +187,7 @@
               <td class="day-total num {dayTone}">{fmtMoney(num(day.total_pnl), currency)}</td>
             </tr>
 
-            {#each day.trades as t, i (day.date + t.symbol + t.trade_time + i)}
+            {#each day.rows as t, i (day.date + (t.ib_order_id || t.symbol + t.trade_time) + i)}
               <tr>
                 <td class="sym">
                   {t.symbol}
@@ -135,12 +199,17 @@
                   {#if t.order_type || t.notes_codes}
                     <span class="tag">{[t.order_type, t.notes_codes].filter(Boolean).join(" · ")}</span>
                   {/if}
+                  {#if t.fillCount > 1}
+                    <span class="tag fills" title="{t.fillCount} executions filled this order">
+                      ×{t.fillCount} fills
+                    </span>
+                  {/if}
                 </td>
                 <td class="num">{fmtQty(num(t.quantity))}</td>
                 {#if cols.price}
                   <td class="num">
                     {#if t.trade_price !== null}
-                      {fmtPriceLike(num(t.trade_price), t.currency, 4)}
+                      {t.fillCount > 1 ? "≈" : ""}{fmtPriceLike(num(t.trade_price), t.currency, 4)}
                     {:else}<span class="dash">{EM_DASH}</span>{/if}
                   </td>
                 {/if}
@@ -160,6 +229,9 @@
                 {/if}
                 {#if cols.time}
                   <td class="num dim">{t.trade_time || EM_DASH}</td>
+                {/if}
+                {#if cols.orderId}
+                  <td class="num dim order-id">{t.ib_order_id || EM_DASH}</td>
                 {/if}
                 <td class="num pnl">
                   {#if t.is_realizing}
@@ -270,6 +342,10 @@
   td.dim {
     color: var(--dim-70);
   }
+  td.order-id {
+    font-size: var(--text-2xs);
+    color: var(--dim-45);
+  }
 
   tbody tr:hover td {
     background: var(--surface-02);
@@ -310,6 +386,10 @@
     color: var(--dim-45);
     margin-left: 5px;
     letter-spacing: 0.02em;
+  }
+  .tag.fills {
+    color: var(--accent);
+    font-weight: var(--weight-semibold);
   }
 
   .side {

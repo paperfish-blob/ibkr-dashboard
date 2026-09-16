@@ -38,6 +38,9 @@ export interface RealizedTrade {
   order_type: string;
   notes_codes: string;
   exchange: string;
+  /** Shared by every execution that filled the same order; "" when the Flex
+   *  Query omits IB Order ID. */
+  ib_order_id: string;
   /** realized_pnl + commission. Available, but not what the dashboard shows. */
   net_pnl: DecimalString;
   /** False for a trade that only opened or added to a position. */
