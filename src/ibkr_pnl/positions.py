@@ -46,6 +46,7 @@ class _OrderRow:
     fill_count: int
     realized_pnl: Decimal
     commission: Decimal
+    ib_order_id: str = ""
 
     @property
     def is_realizing(self) -> bool:
@@ -61,6 +62,7 @@ class _OrderRow:
             fill_count=self.fill_count,
             realized_pnl=self.realized_pnl if realized_pnl is None else realized_pnl,
             commission=self.commission,
+            ib_order_id=self.ib_order_id,
         )
 
 
@@ -92,7 +94,7 @@ def _group_by_order(trades: list[RealizedTrade]) -> list[_OrderRow]:
         )
         for t in singles
     ]
-    for fills in by_order.values():
+    for order_id, fills in by_order.items():
         first = fills[0]
         quantity = sum((abs(f.quantity) for f in fills), Decimal(0))
         has_price = all(f.trade_price is not None for f in fills)
@@ -115,6 +117,7 @@ def _group_by_order(trades: list[RealizedTrade]) -> list[_OrderRow]:
                 fill_count=len(fills),
                 realized_pnl=sum((f.realized_pnl for f in fills), Decimal(0)),
                 commission=sum((f.commission for f in fills), Decimal(0)),
+                ib_order_id=order_id,
             )
         )
 
@@ -186,6 +189,9 @@ class _Accumulator:
                 sum((leg.realized_pnl for leg in self.exit_legs), Decimal(0))
                 if self.exit_legs
                 else None
+            ),
+            commission=sum(
+                (leg.commission for leg in (*self.entry_legs, *self.exit_legs)), Decimal(0)
             ),
             entry_legs=self.entry_legs,
             exit_legs=exit_legs,

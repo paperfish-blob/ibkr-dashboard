@@ -130,6 +130,10 @@ class PositionLeg(BaseModel):
     fill_count: int
     realized_pnl: Decimal
     commission: Decimal
+    # "" when every fill in this leg shares one order, or when the Flex
+    # Query omits IB Order ID; a leg only ever spans one order, so this is
+    # never ambiguous the way it would be at the Position level.
+    ib_order_id: str = ""
     # Share of the position's total size this exit accounts for. Exit legs
     # only -- an entry leg is part of *opening* the size, not closing it.
     pct_of_position: Decimal | None = None
@@ -157,6 +161,7 @@ class Position(BaseModel):
     exit_date: date | None
     exit_count: int
     realized_pnl: Decimal | None  # None while open with nothing realized yet
+    commission: Decimal  # summed across every entry and exit leg
     entry_legs: list[PositionLeg]
     exit_legs: list[PositionLeg]
 

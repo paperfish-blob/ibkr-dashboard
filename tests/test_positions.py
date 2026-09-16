@@ -147,9 +147,9 @@ def test_still_open_position_has_no_exits_yet():
 def test_same_order_fills_collapse_into_one_leg():
     positions = build_positions(
         flex(
-            trade("2026-01-05", "09:30:00", "BUY", "100", "10.00", order_id="X1"),
-            trade("2026-01-05", "09:30:00", "BUY", "4", "10.00", order_id="X1"),
-            trade("2026-01-06", "09:30:00", "SELL", "104", "11.00", pnl="104"),
+            trade("2026-01-05", "09:30:00", "BUY", "100", "10.00", order_id="X1", commission="-1"),
+            trade("2026-01-05", "09:30:00", "BUY", "4", "10.00", order_id="X1", commission="-1"),
+            trade("2026-01-06", "09:30:00", "SELL", "104", "11.00", pnl="104", order_id="X2", commission="-1"),
         )
     )
 
@@ -158,7 +158,12 @@ def test_same_order_fills_collapse_into_one_leg():
     assert len(p.entry_legs) == 1
     assert p.entry_legs[0].fill_count == 2
     assert p.entry_legs[0].quantity == Decimal("104")
+    assert p.entry_legs[0].ib_order_id == "X1"
+    assert p.exit_legs[0].ib_order_id == "X2"
     assert p.quantity == Decimal("104")
+    # Total commission is entry + exit, not just the exit -- an order's
+    # commission is real cost whether it opened or closed the position.
+    assert p.commission == Decimal("-3")
 
 
 def test_flip_splits_into_two_positions():
