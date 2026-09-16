@@ -46,7 +46,9 @@
     for (const fills of byOrder.values()) {
       rows.push(fills.length === 1 ? { ...fills[0], fillCount: 1 } : aggregateFills(fills));
     }
-    return rows.sort((a, b) => a.trade_time.localeCompare(b.trade_time));
+    // Newest first, matching the ungrouped day order the backend already
+    // sorts to -- grouping shouldn't also flip the whole day's ordering.
+    return rows.sort((a, b) => b.trade_time.localeCompare(a.trade_time));
   }
 
   function aggregateFills(fills: RealizedTrade[]): LedgerRow {
