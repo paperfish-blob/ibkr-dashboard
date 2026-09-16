@@ -157,6 +157,10 @@
     <div class="hd-left">
       <div class="eyebrow">Running total</div>
       <div class="title">Cumulative realized P&amp;L</div>
+      <div class="caption">
+        Gross, before commission · Flex trades only, one point per day with activity · today added
+        from Gateway when connected, else today's Flex trades
+      </div>
     </div>
   </div>
 
@@ -203,6 +207,12 @@
     font-weight: var(--weight-semibold);
     letter-spacing: -0.01em;
     color: var(--text);
+  }
+  .caption {
+    font-size: var(--text-2xs);
+    color: var(--dim-45);
+    letter-spacing: 0.01em;
+    margin-top: 2px;
   }
   .body {
     padding: 14px 18px 18px;
