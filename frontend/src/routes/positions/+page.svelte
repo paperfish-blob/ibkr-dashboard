@@ -15,6 +15,7 @@
     refreshPositions,
     posFilter,
     posSymbols,
+    posCarryInOnly,
     type PosFilter,
   } from "$lib/stores";
 
@@ -38,6 +39,8 @@
     return m;
   });
 
+  const carryInCount = $derived(($positions?.positions ?? []).filter((p) => p.is_carry_in).length);
+
   const filtered = $derived.by(() => {
     const all = $positions?.positions ?? [];
     const byStatus = all.filter((p) => {
@@ -45,7 +48,10 @@
       if ($posFilter === "closed") return !p.is_open;
       return true;
     });
-    return $posSymbols.length ? byStatus.filter((p) => $posSymbols.includes(p.symbol)) : byStatus;
+    const bySymbol = $posSymbols.length
+      ? byStatus.filter((p) => $posSymbols.includes(p.symbol))
+      : byStatus;
+    return $posCarryInOnly ? bySymbol.filter((p) => p.is_carry_in) : bySymbol;
   });
 
   const total = $derived(
@@ -100,6 +106,18 @@
         active={$posSymbols}
         onChange={(next) => posSymbols.set(next)}
       />
+      {#if carryInCount > 0}
+        <button
+          class="carry-toggle"
+          class:active={$posCarryInOnly}
+          onclick={() => posCarryInOnly.update((v) => !v)}
+          title="Positions whose opening trade is outside the fetched date range"
+        >
+          <span class="box"></span>
+          Carry-in only
+          <span class="count">{carryInCount}</span>
+        </button>
+      {/if}
     </div>
   {/if}
 
@@ -136,7 +154,63 @@
     color: var(--text);
   }
   .toolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    flex-wrap: wrap;
     margin-bottom: 14px;
+  }
+  .carry-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    padding: 6px 11px;
+    border-radius: var(--radius-pill);
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--dim-70);
+    font-family: var(--font-sans);
+    font-size: var(--text-xs);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.01em;
+    cursor: pointer;
+    white-space: nowrap;
+  }
+  .carry-toggle .box {
+    width: 13px;
+    height: 13px;
+    border: 1.5px solid var(--border-12);
+    border-radius: 3px;
+    flex: none;
+  }
+  .carry-toggle .count {
+    color: var(--dim-45);
+    font-variant-numeric: tabular-nums;
+  }
+  .carry-toggle.active {
+    background: var(--ink);
+    color: var(--on-ink);
+    border-color: var(--ink);
+  }
+  .carry-toggle.active .box {
+    background: var(--on-ink);
+    border-color: var(--on-ink);
+    position: relative;
+  }
+  .carry-toggle.active .box::after {
+    content: "";
+    position: absolute;
+    left: 2.5px;
+    top: 1.5px;
+    width: 6px;
+    height: 3px;
+    border-left: 1.5px solid var(--ink);
+    border-bottom: 1.5px solid var(--ink);
+    transform: rotate(-45deg);
+  }
+  .carry-toggle.active .count {
+    color: rgba(255, 255, 255, 0.6);
   }
   .panel-empty {
     padding: 40px 18px;

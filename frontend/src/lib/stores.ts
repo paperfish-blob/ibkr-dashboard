@@ -115,6 +115,10 @@ export const posFilter = persisted<PosFilter>("ibkr.pos.filter", "all");
 /** Symbols to show on the Positions page, same idea as txSymbols. */
 export const posSymbols = persisted<string[]>("ibkr.pos.symbols", []);
 
+/** Show only carry-in positions -- orthogonal to posFilter, since a
+ *  carry-in can be either open or closed. Off by default. */
+export const posCarryInOnly = persisted<boolean>("ibkr.pos.carryInOnly", false);
+
 /** Selected period: "all" or a four-digit year. Shared by Overview,
  *  Transactions and Positions so the choice follows you between them.
  *  Defaults to "all" so a freshly downloaded year shows up without anyone
