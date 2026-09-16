@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import PageHeader from "$lib/components/PageHeader.svelte";
   import SegToggle from "$lib/components/SegToggle.svelte";
+  import SymbolFilter from "$lib/components/SymbolFilter.svelte";
   import TransactionLedger from "$lib/components/TransactionLedger.svelte";
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
   import AlertBar from "$lib/components/AlertBar.svelte";
@@ -13,6 +14,7 @@
     transactionsError,
     refreshTransactions,
     txFilter,
+    txSymbols,
     type TxFilter,
   } from "$lib/stores";
 
@@ -28,6 +30,22 @@
   // multi-currency statement is flagged by the backend's currency_warning.
   const currency = $derived($transactions?.days[0]?.trades[0]?.currency ?? "USD");
   const total = $derived(num($transactions?.total_realized ?? 0));
+
+  // Symbol filter narrows the trades within each day, so the day's total has
+  // to be recomputed from what's left -- unlike the realized-only filter, an
+  // excluded symbol's P&L is real money leaving the sum, not an opening
+  // trade's guaranteed zero.
+  const symbolFilteredDays = $derived.by(() => {
+    const days = $transactions?.days ?? [];
+    if ($txSymbols.length === 0) return days;
+    return days
+      .map((d) => {
+        const trades = d.trades.filter((t) => $txSymbols.includes(t.symbol));
+        const total_pnl = String(trades.reduce((sum, t) => sum + num(t.realized_pnl), 0));
+        return { ...d, trades, total_pnl };
+      })
+      .filter((d) => d.trades.length > 0);
+  });
 
   async function handleRefresh() {
     refreshing = true;
@@ -75,10 +93,20 @@
 
   <AlertBar messages={[$transactionsError, $transactions?.flex_error]} />
 
+  {#if $transactions}
+    <div class="toolbar">
+      <SymbolFilter
+        days={$transactions.days}
+        active={$txSymbols}
+        onChange={(next) => txSymbols.set(next)}
+      />
+    </div>
+  {/if}
+
   {#if $transactionsLoading && !$transactions}
     <SkeletonCard height={480} rows={8} />
   {:else if $transactions}
-    <TransactionLedger days={$transactions.days} filter={$txFilter} {currency} />
+    <TransactionLedger days={symbolFilteredDays} filter={$txFilter} {currency} />
   {:else}
     <div class="panel-empty">
       Could not load transactions. Check that the backend is running on port 9001.
@@ -90,6 +118,9 @@
   .page {
     padding: var(--page-py) var(--page-px);
     width: 100%;
+  }
+  .toolbar {
+    margin-bottom: 14px;
   }
   .range {
     font-size: var(--text-xs);

@@ -79,6 +79,11 @@ export type TxFilter = "all" | "realized";
  *  way IBKR's own apps do. Persisted so the choice survives a reload. */
 export const txFilter = persisted<TxFilter>("ibkr.tx.filter", "all");
 
+/** Symbols to show in the ledger. Empty means every symbol. Persisted like
+ *  txFilter; a stale symbol from a since-changed period just filters to
+ *  nothing rather than erroring, same as any other empty-result state. */
+export const txSymbols = persisted<string[]>("ibkr.tx.symbols", []);
+
 /** Selected period: "all" or a four-digit year. Shared by Overview and
  *  Transactions so the choice follows you between them. Defaults to "all" so
  *  a freshly downloaded year shows up without anyone hunting for a setting. */
