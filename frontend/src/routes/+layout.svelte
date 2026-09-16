@@ -7,6 +7,7 @@
   const nav = [
     { href: "/", label: "Overview" },
     { href: "/transactions", label: "Transactions" },
+    { href: "/round-trips", label: "Round Trips" },
     { href: "/history", label: "History" },
   ];
 
@@ -28,6 +29,13 @@
             {:else if item.href === "/transactions"}
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M2 4h12M2 8h12M2 12h8" />
+              </svg>
+            {:else if item.href === "/round-trips"}
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3.5 6H10a2 2 0 0 1 2 2v1" />
+                <path d="M8.5 4L11 6l-2.5 2" />
+                <path d="M12.5 10H6a2 2 0 0 1-2-2V7" />
+                <path d="M7.5 12L5 10l2.5-2" />
               </svg>
             {:else}
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">

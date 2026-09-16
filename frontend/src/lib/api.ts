@@ -100,6 +100,52 @@ export interface TransactionsResponse {
   years_covered: number[];
 }
 
+/** One FIFO-matched completed position -- see the backend's round_trips.py
+ *  for what "completed" means and why one continuous position can produce
+ *  more than one of these. */
+export interface RoundTrip {
+  symbol: string;
+  currency: string;
+  asset_category: string;
+  side: "long" | "short";
+  quantity: DecimalString;
+  /** null when the opening lot predates the downloaded window -- the
+   *  position was already open when this data begins. */
+  opened_date: IsoDate | null;
+  opened_time: string;
+  open_price: DecimalString | null;
+  closed_date: IsoDate;
+  closed_time: string;
+  close_price: DecimalString | null;
+  realized_pnl: DecimalString;
+  commission: DecimalString;
+  net_pnl: DecimalString;
+  /** The full executions this round trip was matched from -- not sliced to
+   *  this round trip's own quantity. One execution split across several
+   *  round trips carries its whole original quantity/commission on each
+   *  one; `quantity` above is what actually belongs to this slice.
+   *  opening_trade is null exactly when opened_date is. */
+  opening_trade: RealizedTrade | null;
+  closing_trade: RealizedTrade;
+}
+
+export interface RoundTripsResponse {
+  /** Newest closed first. */
+  round_trips: RoundTrip[];
+  total_realized: DecimalString;
+  total_commission: DecimalString;
+  /** Number of round trips, not executions. */
+  trade_count: number;
+  from_date: IsoDate | null;
+  to_date: IsoDate | null;
+  flex_ok: boolean;
+  flex_error: string;
+  flex_fetched_at: IsoDateTime | null;
+  account_id: string;
+  period: string;
+  years_covered: number[];
+}
+
 export type YearState = "missing" | "downloading" | "stored" | "error";
 
 export interface YearStatus {
@@ -154,6 +200,8 @@ export const api = {
     get<PnLResponse>(`/api/pnl?period=${encodeURIComponent(period)}`),
   transactions: (period = "all"): Promise<TransactionsResponse> =>
     get<TransactionsResponse>(`/api/transactions?period=${encodeURIComponent(period)}`),
+  roundTrips: (period = "all"): Promise<RoundTripsResponse> =>
+    get<RoundTripsResponse>(`/api/round-trips?period=${encodeURIComponent(period)}`),
   history: (): Promise<HistoryStatus> => get<HistoryStatus>("/api/history"),
   /** `started` is false when a download is already running -- only one runs
    *  at a time, and the message says which year holds the slot. */

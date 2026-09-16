@@ -10,6 +10,7 @@ import {
   api,
   type HistoryStatus,
   type PnLResponse,
+  type RoundTripsResponse,
   type TransactionsResponse,
 } from "./api";
 
@@ -71,6 +72,23 @@ export async function refreshTransactions(): Promise<void> {
   }
 }
 
+// ── Round trips ──────────────────────────────────────────────────────────────
+
+export const roundTrips = writable<RoundTripsResponse | null>(null);
+export const roundTripsLoading = writable(true);
+export const roundTripsError = writable<string | null>(null);
+
+export async function refreshRoundTrips(): Promise<void> {
+  roundTripsError.set(null);
+  try {
+    roundTrips.set(await api.roundTrips(get(period)));
+  } catch (e) {
+    roundTripsError.set(e instanceof Error ? e.message : "Failed to load round trips");
+  } finally {
+    roundTripsLoading.set(false);
+  }
+}
+
 // ── Preferences ───────────────────────────────────────────────────────────────
 
 export type TxFilter = "all" | "realized";
@@ -79,19 +97,22 @@ export type TxFilter = "all" | "realized";
  *  way IBKR's own apps do. Persisted so the choice survives a reload. */
 export const txFilter = persisted<TxFilter>("ibkr.tx.filter", "all");
 
-/** Selected period: "all" or a four-digit year. Shared by Overview and
- *  Transactions so the choice follows you between them. Defaults to "all" so
- *  a freshly downloaded year shows up without anyone hunting for a setting. */
+/** Selected period: "all" or a four-digit year. Shared across every page that
+ *  reads Flex data so the choice follows you between them. Defaults to "all"
+ *  so a freshly downloaded year shows up without anyone hunting for a
+ *  setting. */
 export const period = persisted<string>("ibkr.period", "all");
 
-/** Re-fetch both feeds when the period changes. */
+/** Re-fetch every period-scoped feed when the period changes. */
 export function setPeriod(value: string): void {
   if (get(period) === value) return;
   period.set(value);
   pnlLoading.set(true);
   transactionsLoading.set(true);
+  roundTripsLoading.set(true);
   void refreshPnL();
   void refreshTransactions();
+  void refreshRoundTrips();
 }
 
 // ── History / downloads ───────────────────────────────────────────────────────
@@ -110,10 +131,11 @@ export async function refreshHistory(): Promise<void> {
     history.set(status);
 
     // A download just finished: what "all" covers has changed, so the other
-    // two pages are now showing a stale view of the data.
+    // pages are now showing a stale view of the data.
     if (wasDownloading !== null && status.downloading === null) {
       void refreshPnL();
       void refreshTransactions();
+      void refreshRoundTrips();
     }
     wasDownloading = status.downloading;
 

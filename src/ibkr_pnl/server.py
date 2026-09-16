@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 from datetime import date
+from decimal import Decimal
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Query
@@ -14,7 +15,8 @@ from fastapi.staticfiles import StaticFiles
 from . import aggregate, cache
 from .config import PROJECT_ROOT, settings
 from .history import HistoryStatus, manager
-from .models import FlexResult, PnLResponse, TransactionsResponse
+from .models import FlexResult, PnLResponse, RoundTripsResponse, TransactionsResponse
+from .round_trips import match as match_round_trips
 from .sources.gateway import monitor
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -60,6 +62,30 @@ async def get_transactions(period: str = PERIOD_QUERY):
     flex_result, years = await cache.get_period(period)
     response = aggregate.group_transactions(flex_result)
     return response.model_copy(update={"period": period, "years_covered": years})
+
+
+@app.get("/api/round-trips", response_model=RoundTripsResponse)
+async def get_round_trips(period: str = PERIOD_QUERY):
+    """Executions grouped into completed FIFO round trips -- see
+    round_trips.match. Sourced from Flex alone, same as Transactions:
+    Gateway has no per-trade detail to add here."""
+    flex_result, years = await cache.get_period(period)
+    round_trips = match_round_trips(flex_result)
+    dates = [rt.closed_date for rt in round_trips]
+    return RoundTripsResponse(
+        round_trips=round_trips,
+        total_realized=sum((rt.realized_pnl for rt in round_trips), Decimal(0)),
+        total_commission=sum((rt.commission for rt in round_trips), Decimal(0)),
+        trade_count=len(round_trips),
+        from_date=min(dates) if dates else None,
+        to_date=max(dates) if dates else None,
+        flex_ok=flex_result.ok,
+        flex_error=flex_result.error,
+        flex_fetched_at=flex_result.fetched_at,
+        account_id=flex_result.account_id,
+        period=period,
+        years_covered=years,
+    )
 
 
 @app.get("/api/history", response_model=HistoryStatus)

@@ -115,6 +115,78 @@ class TransactionsResponse(BaseModel):
     years_covered: list[int] = []
 
 
+class RoundTrip(BaseModel):
+    """One completed FIFO-matched position: a slice of an opening execution
+    closed against a slice of a later closing execution.
+
+    A single flat-to-flat position (0 -> ... -> 0) can produce more than one
+    of these. A close that draws on more than one still-open lot -- a
+    partial close followed later by a full close, say -- splits into one
+    RoundTrip per lot it draws from, the same way IBKR's own FIFO accounting
+    would; see round_trips.match for the mechanics.
+
+    realized_pnl and commission are never invented: they are Flex's own
+    figures for the closing (and, for commission, opening) execution,
+    apportioned across however many RoundTrips that execution's quantity
+    ends up split into, by quantity share. Summed across every RoundTrip
+    for a period, both reconcile exactly with Transactions and Overview --
+    this only redraws the lines between trades, it never moves money.
+    """
+
+    symbol: str
+    currency: str
+    asset_category: str
+    side: Literal["long", "short"]
+    quantity: Decimal  # positive: the size of this matched slice
+
+    # None when the opening lot was never observed -- it predates the
+    # earliest year in this period's downloaded data, so this position was
+    # already open when the window began. Its true entry is unknown; what's
+    # shown is only the close.
+    opened_date: date | None = None
+    opened_time: str = ""
+    open_price: Decimal | None = None
+
+    closed_date: date
+    closed_time: str = ""
+    close_price: Decimal | None = None
+
+    realized_pnl: Decimal
+    commission: Decimal = Decimal(0)
+
+    # The full executions this round trip was matched from -- not sliced
+    # down to this round trip's own quantity. An opening execution split
+    # across several round trips (a partial close followed by a later full
+    # close, say) carries its whole original quantity/commission/etc. on
+    # each one; RoundTrip.quantity is what actually belongs to this slice.
+    # opening_trade is None exactly when opened_date is: no execution was
+    # ever observed opening this position.
+    opening_trade: RealizedTrade | None = None
+    closing_trade: RealizedTrade
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def net_pnl(self) -> Decimal:
+        return self.realized_pnl + self.commission
+
+
+class RoundTripsResponse(BaseModel):
+    """What GET /api/round-trips returns."""
+
+    round_trips: list[RoundTrip]  # newest closed first
+    total_realized: Decimal
+    total_commission: Decimal
+    trade_count: int  # number of round trips, not executions
+    from_date: date | None
+    to_date: date | None
+    flex_ok: bool
+    flex_error: str = ""
+    flex_fetched_at: datetime | None = None
+    account_id: str = ""
+    period: str = "all"
+    years_covered: list[int] = []
+
+
 class PnLResponse(BaseModel):
     """What GET /api/pnl returns."""
 
