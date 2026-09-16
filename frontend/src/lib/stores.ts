@@ -10,6 +10,7 @@ import {
   api,
   type HistoryStatus,
   type PnLResponse,
+  type PositionsResponse,
   type TransactionsResponse,
 } from "./api";
 
@@ -71,6 +72,23 @@ export async function refreshTransactions(): Promise<void> {
   }
 }
 
+// ── Positions ─────────────────────────────────────────────────────────────────
+
+export const positions = writable<PositionsResponse | null>(null);
+export const positionsLoading = writable(true);
+export const positionsError = writable<string | null>(null);
+
+export async function refreshPositions(): Promise<void> {
+  positionsError.set(null);
+  try {
+    positions.set(await api.positions(get(period)));
+  } catch (e) {
+    positionsError.set(e instanceof Error ? e.message : "Failed to load positions");
+  } finally {
+    positionsLoading.set(false);
+  }
+}
+
 // ── Preferences ───────────────────────────────────────────────────────────────
 
 export type TxFilter = "all" | "realized" | "opening";
@@ -89,19 +107,30 @@ export const txSymbols = persisted<string[]>("ibkr.tx.symbols", []);
  *  time), so it should be an opt-in rather than a surprise on load. */
 export const txGroupFills = persisted<boolean>("ibkr.tx.groupFills", false);
 
-/** Selected period: "all" or a four-digit year. Shared by Overview and
- *  Transactions so the choice follows you between them. Defaults to "all" so
- *  a freshly downloaded year shows up without anyone hunting for a setting. */
+export type PosFilter = "all" | "open" | "closed";
+
+/** Positions filter, same idea as txFilter. */
+export const posFilter = persisted<PosFilter>("ibkr.pos.filter", "all");
+
+/** Symbols to show on the Positions page, same idea as txSymbols. */
+export const posSymbols = persisted<string[]>("ibkr.pos.symbols", []);
+
+/** Selected period: "all" or a four-digit year. Shared by Overview,
+ *  Transactions and Positions so the choice follows you between them.
+ *  Defaults to "all" so a freshly downloaded year shows up without anyone
+ *  hunting for a setting. */
 export const period = persisted<string>("ibkr.period", "all");
 
-/** Re-fetch both feeds when the period changes. */
+/** Re-fetch every period-scoped feed when the period changes. */
 export function setPeriod(value: string): void {
   if (get(period) === value) return;
   period.set(value);
   pnlLoading.set(true);
   transactionsLoading.set(true);
+  positionsLoading.set(true);
   void refreshPnL();
   void refreshTransactions();
+  void refreshPositions();
 }
 
 // ── History / downloads ───────────────────────────────────────────────────────

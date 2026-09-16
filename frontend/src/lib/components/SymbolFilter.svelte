@@ -5,24 +5,17 @@
    * an active pill narrows the ledger to that symbol, several narrow to their
    * union, none means every symbol.
    */
-  import type { DayGroup } from "$lib/api";
-
   interface Props {
-    days: DayGroup[];
+    /** Symbol -> however the caller wants it counted (trades, positions,
+     *  whatever count belongs in the overflow list next to each name). */
+    counts: Map<string, number>;
     active: string[];
     onChange: (next: string[]) => void;
   }
-  let { days, active, onChange }: Props = $props();
+  let { counts, active, onChange }: Props = $props();
 
   const TOP_N = 4;
 
-  const counts = $derived.by(() => {
-    const m = new Map<string, number>();
-    for (const d of days) {
-      for (const t of d.trades) m.set(t.symbol, (m.get(t.symbol) ?? 0) + 1);
-    }
-    return m;
-  });
   const periodSymbols = $derived(
     [...counts.keys()].sort((a, b) => (counts.get(b) ?? 0) - (counts.get(a) ?? 0)),
   );

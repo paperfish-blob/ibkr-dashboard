@@ -103,6 +103,58 @@ export interface TransactionsResponse {
   years_covered: number[];
 }
 
+/** One order's contribution to a position -- entry (added to it) or exit
+ *  (reduced it). Already collapsed across that order's partial fills.
+ *  quantity is always a positive magnitude; direction lives on Position. */
+export interface PositionLeg {
+  trade_date: IsoDate;
+  trade_time: string;
+  buy_sell: string;
+  price: DecimalString | null;
+  quantity: DecimalString;
+  fill_count: number;
+  realized_pnl: DecimalString;
+  commission: DecimalString;
+  /** Share of the position's total size this exit accounts for. Exit legs
+   *  only -- null on entry legs. */
+  pct_of_position: DecimalString | null;
+}
+
+/** One round trip: a symbol's net quantity moving away from zero and
+ *  (usually) back. */
+export interface Position {
+  symbol: string;
+  asset_category: string;
+  currency: string;
+  direction: "long" | "short";
+  is_open: boolean;
+  /** The very first trade we see for this symbol already closes something --
+   *  its opening trade happened before the fetched date range, so
+   *  open_date/open_time/entry_price are unknown rather than guessed. */
+  is_carry_in: boolean;
+  open_date: IsoDate | null;
+  open_time: string;
+  entry_price: DecimalString | null;
+  quantity: DecimalString;
+  exit_date: IsoDate | null;
+  exit_count: number;
+  /** null while open with nothing realized yet. */
+  realized_pnl: DecimalString | null;
+  entry_legs: PositionLeg[];
+  exit_legs: PositionLeg[];
+}
+
+export interface PositionsResponse {
+  /** Most recent activity first. */
+  positions: Position[];
+  flex_ok: boolean;
+  flex_error: string;
+  flex_fetched_at: IsoDateTime | null;
+  account_id: string;
+  period: string;
+  years_covered: number[];
+}
+
 export type YearState = "missing" | "downloading" | "stored" | "error";
 
 export interface YearStatus {
@@ -157,6 +209,8 @@ export const api = {
     get<PnLResponse>(`/api/pnl?period=${encodeURIComponent(period)}`),
   transactions: (period = "all"): Promise<TransactionsResponse> =>
     get<TransactionsResponse>(`/api/transactions?period=${encodeURIComponent(period)}`),
+  positions: (period = "all"): Promise<PositionsResponse> =>
+    get<PositionsResponse>(`/api/positions?period=${encodeURIComponent(period)}`),
   history: (): Promise<HistoryStatus> => get<HistoryStatus>("/api/history"),
   /** `started` is false when a download is already running -- only one runs
    *  at a time, and the message says which year holds the slot. */

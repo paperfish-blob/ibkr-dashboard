@@ -33,6 +33,14 @@
   const currency = $derived($transactions?.days[0]?.trades[0]?.currency ?? "USD");
   const total = $derived(num($transactions?.total_realized ?? 0));
 
+  const symbolCounts = $derived.by(() => {
+    const m = new Map<string, number>();
+    for (const d of $transactions?.days ?? []) {
+      for (const t of d.trades) m.set(t.symbol, (m.get(t.symbol) ?? 0) + 1);
+    }
+    return m;
+  });
+
   // Symbol filter narrows the trades within each day, so the day's total has
   // to be recomputed from what's left -- unlike the realized-only filter, an
   // excluded symbol's P&L is real money leaving the sum, not an opening
@@ -112,7 +120,7 @@
   {#if $transactions}
     <div class="toolbar">
       <SymbolFilter
-        days={$transactions.days}
+        counts={symbolCounts}
         active={$txSymbols}
         onChange={(next) => txSymbols.set(next)}
       />
