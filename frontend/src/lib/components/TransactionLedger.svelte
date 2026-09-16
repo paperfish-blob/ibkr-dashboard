@@ -18,9 +18,6 @@
   }
   let { days, filter, currency = "USD" }: Props = $props();
 
-  const DAYS_PER_PAGE = 20;
-  let shown = $state(DAYS_PER_PAGE);
-
   const visible = $derived(
     filter === "realized"
       ? days
@@ -29,9 +26,7 @@
       : days,
   );
 
-  const page = $derived(visible.slice(0, shown));
   const tradeCount = $derived(visible.reduce((n, d) => n + d.trades.length, 0));
-  const hasMore = $derived(shown < visible.length);
 
   // Price / Amount / Time only exist if the Flex Query exports Trade Price,
   // Trade Money and Date/Time. A query without them would otherwise render
@@ -63,13 +58,6 @@
   const totalCols = $derived(3 + optionalCols + 1);
   /** The day band spans everything left of its trade-count and total cells. */
   const dayRowSpan = $derived(totalCols - 2);
-
-  // Paging back to the top whenever the filter changes: keeping a deep scroll
-  // position across a set that just got shorter strands the reader mid-list.
-  $effect(() => {
-    void filter;
-    shown = DAYS_PER_PAGE;
-  });
 
   function sideLabel(buySell: string): string {
     const s = buySell.toUpperCase();
@@ -123,7 +111,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each page as day (day.date)}
+          {#each visible as day (day.date)}
             {@const dayTone = toneOf(num(day.total_pnl))}
             <tr class="day-row">
               <td class="day-date" colspan={dayRowSpan}>{fmtFullDate(day.date)}</td>
@@ -186,12 +174,6 @@
         </tbody>
       </table>
     </div>
-
-    {#if hasMore}
-      <button class="more" onclick={() => (shown += DAYS_PER_PAGE)}>
-        Show more — {visible.length - shown} more {visible.length - shown === 1 ? "day" : "days"}
-      </button>
-    {/if}
   {/if}
 </div>
 
@@ -357,26 +339,5 @@
     text-align: center;
     padding: 40px 0;
     font-size: var(--text-sm);
-  }
-
-  .more {
-    display: block;
-    width: 100%;
-    padding: 11px;
-    border: none;
-    border-top: 1px solid var(--border-05);
-    background: var(--surface);
-    color: var(--dim-55);
-    font-family: var(--font-sans);
-    font-size: var(--text-sm);
-    font-weight: var(--weight-medium);
-    cursor: pointer;
-    transition:
-      background 0.15s,
-      color 0.15s;
-  }
-  .more:hover {
-    background: var(--surface-06);
-    color: var(--text);
   }
 </style>
