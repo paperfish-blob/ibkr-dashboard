@@ -168,13 +168,13 @@
         <thead>
           <tr>
             <th>Symbol</th>
+            {#if cols.time}<th class="num">Time</th>{/if}
+            {#if cols.orderId}<th class="num">Order ID</th>{/if}
             <th>Side</th>
             <th class="num">Qty</th>
             {#if cols.price}<th class="num">Price</th>{/if}
             {#if cols.amount}<th class="num">Amount</th>{/if}
             {#if cols.commission}<th class="num">Comm.</th>{/if}
-            {#if cols.time}<th class="num">Time</th>{/if}
-            {#if cols.orderId}<th class="num">Order ID</th>{/if}
             <th class="num">Realized P&amp;L</th>
           </tr>
         </thead>
@@ -194,6 +194,12 @@
                   {#if t.exchange}<span class="tag">{t.exchange}</span>{/if}
                   {#if t.asset_category}<span class="tag">{t.asset_category}</span>{/if}
                 </td>
+                {#if cols.time}
+                  <td class="num dim">{t.trade_time || EM_DASH}</td>
+                {/if}
+                {#if cols.orderId}
+                  <td class="num dim order-id">{t.ib_order_id || EM_DASH}</td>
+                {/if}
                 <td>
                   <span class="side {sideClass(t.buy_sell)}">{sideLabel(t.buy_sell)}</span>
                   {#if t.order_type || t.notes_codes}
@@ -226,12 +232,6 @@
                       {fmtPriceLike(Math.abs(num(t.commission)), t.currency, 2)}
                     {:else}<span class="dash">{EM_DASH}</span>{/if}
                   </td>
-                {/if}
-                {#if cols.time}
-                  <td class="num dim">{t.trade_time || EM_DASH}</td>
-                {/if}
-                {#if cols.orderId}
-                  <td class="num dim order-id">{t.ib_order_id || EM_DASH}</td>
                 {/if}
                 <td class="num pnl">
                   {#if t.is_realizing}
