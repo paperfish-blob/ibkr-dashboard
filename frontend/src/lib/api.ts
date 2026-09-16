@@ -123,6 +123,15 @@ export interface HistoryStatus {
   downloading: number | null;
 }
 
+/** The cache file's own shape -- what /api/history/{year}/raw returns. */
+export interface RawStatement {
+  ok: boolean;
+  trades: RealizedTrade[];
+  fetched_at: IsoDateTime | null;
+  account_id: string;
+  error: string;
+}
+
 const BASE = "";
 
 async function get<T>(path: string): Promise<T> {
@@ -151,3 +160,14 @@ export const api = {
   downloadYear: (year: number): Promise<{ started: boolean; message: string }> =>
     post<{ started: boolean; message: string }>(`/api/history/${year}`),
 };
+
+/** The raw cached statement for one year -- meant as a plain link target
+ *  (`<a href={rawYearUrl(year)} target="_blank">`), not fetched from here.
+ *  The browser's own JSON viewer is the whole UI: view-only by construction,
+ *  since there is nothing on the page for a click to edit. */
+export const rawYearUrl = (year: number): string => `/api/history/${year}/raw`;
+
+/** A hover preview: the first `limit` trades only, so peeking at a year
+ *  never pulls its whole statement across the wire. */
+export const previewYear = (year: number, limit = 2): Promise<RawStatement> =>
+  get<RawStatement>(`/api/history/${year}/raw?limit=${limit}`);

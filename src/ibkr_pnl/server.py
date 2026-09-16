@@ -14,7 +14,7 @@ from fastapi.staticfiles import StaticFiles
 from . import aggregate, cache
 from .config import PROJECT_ROOT, settings
 from .history import HistoryStatus, manager
-from .models import PnLResponse, TransactionsResponse
+from .models import FlexResult, PnLResponse, TransactionsResponse
 from .sources.gateway import monitor
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -77,6 +77,36 @@ async def download_year(year: int):
     """
     started, message = manager.start(year)
     return {"started": started, "message": message}
+
+
+@app.get("/api/history/{year}/raw", response_model=FlexResult)
+async def get_history_raw(
+    year: int,
+    limit: int | None = Query(
+        None,
+        ge=1,
+        description="Return only the first N trades -- a hover preview, not a page size",
+    ),
+):
+    """The exact statement stored for one year, straight off disk.
+
+    Read-only, and deliberately just the cache file as-is rather than routed
+    through get_flex -- viewing a year must never be what triggers a fetch or
+    disturbs its backoff state. 404 (not an empty FlexResult) for a year with
+    nothing on disk, so "never downloaded" reads differently from "downloaded
+    and turned out empty".
+
+    `limit` exists for the History page's hover tooltip: that preview needs
+    two or three trades, not all 700+, and fetching the whole statement on
+    every hover would make hovering feel heavy. Leaving it unset -- what
+    "View JSON" itself opens -- returns everything.
+    """
+    result = cache.read_cached(year)
+    if result is None:
+        raise HTTPException(status_code=404, detail=f"{year} has not been downloaded")
+    if limit is not None:
+        result = result.model_copy(update={"trades": result.trades[:limit]})
+    return result
 
 
 @app.get("/api/health")

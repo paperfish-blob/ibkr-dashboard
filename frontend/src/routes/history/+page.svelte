@@ -18,13 +18,76 @@
     downloadYear,
     stopHistoryPoll,
   } from "$lib/stores";
-  import type { YearStatus } from "$lib/api";
+  import { rawYearUrl, previewYear, type YearStatus } from "$lib/api";
 
   let note = $state<string | null>(null);
   let elapsed = $state(0);
   let ticker: ReturnType<typeof setInterval> | null = null;
 
   const busy = $derived($history?.downloading ?? null);
+
+  // ── "View JSON" hover preview ────────────────────────────────────────────
+  //
+  // A fixed-position tooltip, not one nested in the table: the table sits in
+  // a horizontally-scrolling wrapper (`.scroll`), and an absolutely
+  // positioned child of a scroll container gets clipped by it. Positioning
+  // from the hovered link's own bounding rect and rendering the tooltip at
+  // the page level sidesteps that.
+  //
+  // Fetched once per year and cached in memory for the session: re-hovering
+  // a year already peeked at should not cost another request.
+
+  const previewCache = new Map<number, string>();
+  let tooltip = $state<{ year: number; x: number; y: number } | null>(null);
+  let tooltipText = $state<string | null>(null);
+  let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const TOOLTIP_WIDTH = 380;
+  const TOOLTIP_MAX_HEIGHT = 280;
+  const MARGIN = 16;
+
+  function placeTooltip(anchor: HTMLElement): { x: number; y: number } {
+    const rect = anchor.getBoundingClientRect();
+
+    let x = Math.min(rect.left, window.innerWidth - TOOLTIP_WIDTH - MARGIN);
+    x = Math.max(MARGIN, x);
+
+    let y = rect.bottom + 8;
+    if (y + TOOLTIP_MAX_HEIGHT > window.innerHeight - MARGIN) {
+      // Not enough room below -- flip above the link instead.
+      y = Math.max(MARGIN, rect.top - TOOLTIP_MAX_HEIGHT - 8);
+    }
+    return { x, y };
+  }
+
+  function onViewEnter(year: number, e: MouseEvent) {
+    const anchor = e.currentTarget as HTMLElement;
+    // A short delay: a cursor merely passing over the link on its way
+    // elsewhere should not fire a request.
+    hoverTimer = setTimeout(() => {
+      tooltip = { year, ...placeTooltip(anchor) };
+      tooltipText = previewCache.get(year) ?? null;
+      if (previewCache.has(year)) return;
+
+      previewYear(year).then(
+        (data) => {
+          const text = JSON.stringify(data, null, 2);
+          previewCache.set(year, text);
+          if (tooltip?.year === year) tooltipText = text;
+        },
+        () => {
+          if (tooltip?.year === year) tooltipText = "Couldn't load a preview.";
+        },
+      );
+    }, 200);
+  }
+
+  function onViewLeave() {
+    if (hoverTimer) clearTimeout(hoverTimer);
+    hoverTimer = null;
+    tooltip = null;
+    tooltipText = null;
+  }
 
   async function start(year: number) {
     note = null;
@@ -64,7 +127,10 @@
 
   // The poll belongs to the download, not to this page being open, but there
   // is no point polling for a page nobody is looking at either.
-  onDestroy(() => stopHistoryPoll());
+  onDestroy(() => {
+    stopHistoryPoll();
+    if (hoverTimer) clearTimeout(hoverTimer);
+  });
 </script>
 
 <svelte:head><title>History · IBKR Realized P&L</title></svelte:head>
@@ -131,13 +197,30 @@
                   {y.downloaded_at ? fmtTime(y.downloaded_at) : EM_DASH}
                 </td>
                 <td class="act">
-                  <button
-                    class="run-btn"
-                    disabled={busy !== null}
-                    onclick={() => start(y.year)}
-                  >
-                    {buttonLabel(y)}
-                  </button>
+                  <div class="act-row">
+                    {#if y.state === "stored"}
+                      <!-- Plain link to the API route: the browser's own JSON
+                           viewer is the whole UI, so there is nothing here to
+                           wire up beyond the href -- view-only by construction. -->
+                      <a
+                        class="view-link"
+                        href={rawYearUrl(y.year)}
+                        target="_blank"
+                        rel="noopener"
+                        onmouseenter={(e) => onViewEnter(y.year, e)}
+                        onmouseleave={onViewLeave}
+                      >
+                        View JSON
+                      </a>
+                    {/if}
+                    <button
+                      class="run-btn"
+                      disabled={busy !== null}
+                      onclick={() => start(y.year)}
+                    >
+                      {buttonLabel(y)}
+                    </button>
+                  </div>
                 </td>
               </tr>
               {#if y.error && y.state !== "downloading"}
@@ -150,6 +233,16 @@
     </div>
   {/if}
 </div>
+
+{#if tooltip}
+  <div class="json-tooltip" style="left: {tooltip.x}px; top: {tooltip.y}px;">
+    {#if tooltipText === null}
+      <span class="dim">Loading preview…</span>
+    {:else}
+      <pre>{tooltipText}</pre>
+    {/if}
+  </div>
+{/if}
 
 <style>
   .page {
@@ -275,6 +368,26 @@
     white-space: normal;
   }
 
+  .act-row {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 14px;
+  }
+
+  .view-link {
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-medium);
+    letter-spacing: 0.02em;
+    color: var(--dim-55);
+    text-decoration: underline;
+    text-underline-offset: 2px;
+    white-space: nowrap;
+  }
+  .view-link:hover {
+    color: var(--text);
+  }
+
   /* The primary action, carried over from ui-reference's data-cache page. */
   .run-btn {
     font-family: var(--font-sans);
@@ -318,5 +431,34 @@
     .spinner {
       animation: none;
     }
+  }
+
+  /* Fixed, not absolute: the table sits inside .scroll (overflow-x: auto),
+     which would clip an absolutely-positioned child. Position is computed in
+     script from the hovered link's own bounding rect. */
+  .json-tooltip {
+    position: fixed;
+    z-index: 50;
+    width: 380px;
+    max-height: 280px;
+    overflow: auto;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border-10);
+    border-radius: var(--radius-md);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
+    pointer-events: none;
+  }
+  .json-tooltip pre {
+    margin: 0;
+    font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    font-size: var(--text-2xs);
+    line-height: 1.5;
+    white-space: pre;
+    color: var(--text);
+  }
+  .json-tooltip .dim {
+    font-size: var(--text-xs);
+    color: var(--dim-55);
   }
 </style>
