@@ -15,6 +15,10 @@
     onRefresh?: () => void;
     refreshing?: boolean;
     right?: Snippet;
+    /** Detail-style pages only (e.g. one position) -- an explicit exit back
+     *  to wherever the page drills down from, in addition to a breadcrumb.
+     *  Also bound to Escape while mounted. */
+    onClose?: () => void;
   }
   let {
     eyebrow,
@@ -24,8 +28,15 @@
     onRefresh,
     refreshing = false,
     right,
+    onClose,
   }: Props = $props();
+
+  function handleKeydown(e: KeyboardEvent) {
+    if (e.key === "Escape") onClose?.();
+  }
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <div class="hd" class:sticky style="margin-bottom:{marginBottom}">
   <div class="hd-left">
@@ -55,6 +66,19 @@
           class:spin={refreshing}
         >
           <path d="M14 8A6 6 0 1 1 12.2 3.7M14 2v4h-4" />
+        </svg>
+      </button>
+    {/if}
+    {#if onClose}
+      <div class="sep"></div>
+      <button
+        class="ghost-btn icon close"
+        onclick={onClose}
+        title="Close (Esc)"
+        aria-label="Close"
+      >
+        <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+          <path d="M4 4l8 8M12 4l-8 8" />
         </svg>
       </button>
     {/if}
@@ -150,6 +174,18 @@
   .ghost-btn:disabled {
     opacity: 0.45;
     cursor: not-allowed;
+  }
+  .ghost-btn.close:hover {
+    border-color: rgba(239, 68, 68, 0.35);
+    color: var(--dn);
+    background: rgba(239, 68, 68, 0.06);
+  }
+
+  .sep {
+    width: 1px;
+    height: 20px;
+    background: var(--border-05);
+    margin: 0 2px;
   }
 
   .spin {
