@@ -197,10 +197,17 @@ async def fetch_statement_xml(
     """Run the two-call protocol and return the raw statement XML.
 
     `window` overrides the saved query's own date range via the fd/td request
-    parameters (yyyymmdd, at most 365 days apart, given together). Verified
-    against a real account: a query saved as "Year to Date" returned
-    fromDate=20250101 toDate=20251231 period="" when asked for 2025, so the
-    override wins and clears the saved period.
+    parameters (yyyymmdd, at most 365 days apart, given together). Left as
+    None, SendRequest gets nothing but t/q/v -- the saved query answers with
+    whatever range it was configured with. cache.get_flex relies on that for
+    the current year specifically: the saved query here is itself a "Year to
+    Date" template, so the plain request already returns exactly the current
+    year's trades with no fd/td needed, and no clamp-to-today arithmetic that
+    could get the boundary date wrong. A closed year has no such template to
+    fall back on, which is what fd/td is for. Verified against a real
+    account: a query saved as "Year to Date" returned fromDate=20250101
+    toDate=20251231 period="" when asked for 2025, so the override wins
+    and clears the saved period.
     """
     config = config or settings
     if not config.flex_configured:

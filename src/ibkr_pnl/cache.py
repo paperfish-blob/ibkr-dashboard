@@ -14,6 +14,8 @@ in the query), so deduplication would be guesswork.
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import json
 from datetime import date, datetime, timedelta
 from pathlib import Path
 
@@ -57,6 +59,116 @@ _LOCKOUT_MARKERS = ("1025", "too many failed attempts")
 def _is_lockout(message: str) -> bool:
     lowered = message.lower()
     return any(marker in lowered for marker in _LOCKOUT_MARKERS)
+
+
+# ── Backoff persistence ───────────────────────────────────────────────────────
+#
+# The three dicts above are process state, and that is not where a lockout
+# lives. A lockout outlasts any one run -- an hour of it survives a restart
+# comfortably -- so keeping it in memory alone means every restart forgets it
+# and the first request out of the gate retries. Against 1025 that retry is
+# itself a failed attempt, which resets IBKR's clock: a server restarted a few
+# times while someone debugs can hold its own token locked out indefinitely,
+# which is exactly how the one seen during development stayed alive for hours.
+#
+# Deliberately keyed by query id alone, not by token. A first pass here
+# fingerprinted the token and dropped stored state when it changed, on the
+# theory that a lockout belongs to the token that earned it. That was wrong,
+# and expensively so: a lockout observed to survive a token rotation (a fresh
+# token failed within minutes, with nothing else calling out) means IBKR
+# tracks 1025 against the query/account, not the bearer token. Discarding the
+# stored cooldown on every rotation meant every rotation bought itself one
+# free real attempt against a still-locked-out query -- which failed, which
+# is another attempt, which is what resets IBKR's own clock. Rotating the
+# token is exactly the move someone makes after "please review your
+# configuration", so this was a loop that fed itself on the most likely
+# response to the error.
+#
+# The token is still fingerprinted and recorded, but only for what a stale
+# entry's "token" field is good for: telling a human, reading the file by
+# hand, which credential was in use when it was written. It is never
+# consulted to decide whether the lockout still applies.
+_backoff_loaded = False
+
+
+def _backoff_path(config: Settings) -> Path:
+    return config.cache_dir / f"flex_{config.flex_query_id or 'unset'}_backoff.json"
+
+
+def _token_fingerprint(config: Settings) -> str:
+    return hashlib.sha256(config.flex_token.encode("utf-8")).hexdigest()[:12]
+
+
+def _load_backoff(config: Settings) -> None:
+    """Restore backoff state from disk, once per process.
+
+    Absent or unreadable state is not an error -- it just means nothing is
+    being backed off, which is the correct starting assumption.
+    """
+    global _backoff_loaded
+    if _backoff_loaded:
+        return
+    _backoff_loaded = True
+
+    try:
+        stored = json.loads(_backoff_path(config).read_text(encoding="utf-8"))
+        for raw_year, entry in stored.get("years", {}).items():
+            year = int(raw_year)
+            _failed_at[year] = datetime.fromisoformat(entry["failed_at"])
+            _failures[year] = int(entry.get("failures", 1))
+            _last_error[year] = entry.get("error", "")
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        # Corrupt or hand-edited state: start clean rather than refuse to run.
+        _failed_at.clear()
+        _failures.clear()
+        _last_error.clear()
+
+
+def _save_backoff(config: Settings) -> None:
+    """Mirror the in-memory backoff to disk. Best effort -- failing to record a
+    cooldown must never fail the request that was otherwise fine."""
+    try:
+        path = _backoff_path(config)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            json.dumps(
+                {
+                    "token": _token_fingerprint(config),
+                    "years": {
+                        str(year): {
+                            "failed_at": moment.isoformat(),
+                            "failures": _failures.get(year, 1),
+                            "error": _last_error.get(year, ""),
+                        }
+                        for year, moment in _failed_at.items()
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def _active_lockout() -> tuple[datetime, str] | None:
+    """The most recent lockout still in force, across every year, or None.
+
+    IBKR's 1025 is a property of the token, not of the year that happened to
+    trip it: a lockout earned fetching 2026 blocks a download of 2024 just as
+    surely. Tracked per year, the History page would walk straight into it one
+    year at a time, each attempt resetting the clock for all of them.
+    """
+    newest: tuple[datetime, str] | None = None
+    now = datetime.now()
+    for year, moment in _failed_at.items():
+        reason = _last_error.get(year, "")
+        if not _is_lockout(reason):
+            continue
+        if (now - moment).total_seconds() >= LOCKOUT_BACKOFF_SECONDS:
+            continue  # Served its time.
+        if newest is None or moment > newest[0]:
+            newest = (moment, reason)
+    return newest
 
 
 def _cooldown_seconds(year: int, config: Settings) -> float:
@@ -145,6 +257,7 @@ async def get_flex(
 ) -> FlexResult:
     """Return one year's statement, fetching only when stale or forced."""
     config = config or settings
+    _load_backoff(config)
 
     cached = read_cached(year, config)
     if cached is not None and cached.ok and _is_fresh(cached, year, config) and not force_refresh:
@@ -153,23 +266,23 @@ async def get_flex(
     if not config.flex_configured:
         return FlexResult(ok=False, error="FLEX_TOKEN and FLEX_QUERY_ID are not set in .env")
 
-    # An explicit download (force_refresh) normally tries regardless, so
-    # pressing Download is never silently ignored. The exception is a lockout:
-    # IBKR counts failed *attempts*, so trying during one is not merely futile,
-    # it extends the very thing being waited out.
-    failed_at = _failed_at.get(year)
-    if force_refresh and failed_at is not None and _is_lockout(_last_error.get(year, "")):
-        since = (datetime.now() - failed_at).total_seconds()
-        wait = int(LOCKOUT_BACKOFF_SECONDS - since)
-        if wait > 0:
-            return FlexResult(
-                ok=False,
-                error=(
-                    f"{_last_error[year]} — IBKR counts failed attempts, so "
-                    f"trying again now would extend the lockout. Leave it "
-                    f"{wait // 60}m."
-                ),
-            )
+    # A lockout blocks every year, not just the one that tripped it, and it
+    # blocks an explicit download too. Everything else about force_refresh is
+    # "try anyway, the user asked" -- this is the one case where trying is
+    # worse than doing nothing, because IBKR counts failed *attempts* and the
+    # attempt would extend the very thing being waited out.
+    lockout = _active_lockout()
+    if lockout is not None:
+        moment, reason = lockout
+        wait = int(LOCKOUT_BACKOFF_SECONDS - (datetime.now() - moment).total_seconds())
+        message = (
+            f"{reason} — IBKR counts failed attempts, so trying again now "
+            f"would extend the lockout. Leave it {wait // 60}m."
+        )
+        stale = read_cached(year, config)
+        if stale is not None and stale.ok:
+            return stale.model_copy(update={"error": message})
+        return FlexResult(ok=False, error=message)
 
     if not force_refresh:
         failed_at = _failed_at.get(year)
@@ -201,7 +314,16 @@ async def get_flex(
             if cached is not None and cached.ok and _is_fresh(cached, year, config):
                 return cached
 
-        result = await flex.fetch(config, window=year_window(year))
+        # The current year is asked for with no fd/td at all, not a window
+        # clamped to today. The saved Flex Query is itself a "Year to Date"
+        # template -- overriding it just to reproduce what it already does by
+        # default is a request that can only fail in ways the plain one
+        # can't (a clamp-to-today bug, a 1001 on a boundary date) for no
+        # benefit. A past, closed year has no such template to lean on: there
+        # fd/td is load-bearing, not redundant, since the saved period only
+        # ever covers "now".
+        window = None if year == date.today().year else year_window(year)
+        result = await flex.fetch(config, window=window)
 
     # Only a successful fetch is cached. A failed year must stay retryable --
     # freezing an error as an empty year is the difference between "no trades
@@ -210,12 +332,14 @@ async def get_flex(
         _failed_at.pop(year, None)
         _failures.pop(year, None)
         _last_error.pop(year, None)
+        _save_backoff(config)
         _write_cache(result, year, config)
         return result
 
     _failed_at[year] = datetime.now()
     _failures[year] = _failures.get(year, 0) + 1
     _last_error[year] = result.error
+    _save_backoff(config)
 
     # Refresh failed. Prefer stale-but-real data over showing nothing, while
     # still surfacing the error so an expired token does not read as a

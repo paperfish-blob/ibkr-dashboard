@@ -313,6 +313,227 @@ class TestFailureCooldown:
         assert 2024 not in cache_mod._failed_at
 
 
+class TestBackoffSurvivesRestart:
+    """A lockout outlasts the process that earned it. Holding it in memory
+    alone means a restart forgets it and retries -- and against 1025 that
+    retry is itself a failed attempt, resetting IBKR's clock. A server
+    restarted a few times can then hold its own token locked out for hours."""
+
+    def _config(self, tmp_path, token="t"):
+        return Settings(
+            flex_token=token,
+            flex_query_id="q",
+            cache_dir=tmp_path,
+            flex_failure_cooldown_seconds=90,
+        )
+
+    def _restart(self, cache_mod):
+        """Simulate a fresh process: memory empty, disk untouched."""
+        cache_mod._failed_at.clear()
+        cache_mod._failures.clear()
+        cache_mod._last_error.clear()
+        cache_mod._backoff_loaded = False
+
+    def _fail_once(self, cache_mod, config, monkeypatch, error):
+        import asyncio
+
+        async def failing(config, window=None):
+            return FlexResult(ok=False, error=error)
+
+        monkeypatch.setattr(cache_mod.flex, "fetch", failing)
+        asyncio.run(cache_mod.get_flex(2024, force_refresh=True, config=config))
+
+    def test_a_lockout_is_still_in_force_after_a_restart(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from ibkr_pnl import cache as cache_mod
+
+        config = self._config(tmp_path)
+        self._restart(cache_mod)
+        self._fail_once(
+            cache_mod, config, monkeypatch, "Flex error 1025: Too many failed attempts."
+        )
+
+        self._restart(cache_mod)
+
+        calls = 0
+
+        async def counting(config, window=None):
+            nonlocal calls
+            calls += 1
+            return FlexResult(ok=False, error="should not have been reached")
+
+        monkeypatch.setattr(cache_mod.flex, "fetch", counting)
+        result = asyncio.run(cache_mod.get_flex(2024, config=config))
+
+        assert calls == 0, "restart retried into an active lockout"
+        assert "1025" in result.error
+        assert cache_mod._cooldown_seconds(2024, config) == cache_mod.LOCKOUT_BACKOFF_SECONDS
+
+    def test_a_success_clears_the_stored_backoff(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from ibkr_pnl import cache as cache_mod
+
+        config = self._config(tmp_path)
+        self._restart(cache_mod)
+        # An ordinary failure, not a lockout: a lockout deliberately refuses
+        # the very force_refresh this test needs to recover with.
+        self._fail_once(cache_mod, config, monkeypatch, "temporarily unavailable")
+
+        async def ok_fetch(config, window=None):
+            return FlexResult(ok=True, trades=[], fetched_at=datetime.now())
+
+        monkeypatch.setattr(cache_mod.flex, "fetch", ok_fetch)
+        asyncio.run(cache_mod.get_flex(2024, force_refresh=True, config=config))
+
+        self._restart(cache_mod)
+        asyncio.run(cache_mod.get_flex(2024, config=config))
+
+        assert 2024 not in cache_mod._failed_at
+
+    def test_rotating_the_token_does_not_bypass_the_lockout(self, tmp_path, monkeypatch):
+        """1025 tracks the query/account, not the bearer token: a token
+        rotated during a live lockout fails again within minutes, with
+        nothing else calling out to explain it. Treating a new token as a
+        clean slate bought every rotation one free real attempt against a
+        still-locked-out query -- which failed, extending the very lockout
+        that prompted the rotation in the first place."""
+        import asyncio
+
+        from ibkr_pnl import cache as cache_mod
+
+        self._restart(cache_mod)
+        self._fail_once(
+            cache_mod,
+            self._config(tmp_path, token="old"),
+            monkeypatch,
+            "Flex error 1025: Too many failed attempts.",
+        )
+
+        self._restart(cache_mod)
+
+        calls = 0
+
+        async def counting(config, window=None):
+            nonlocal calls
+            calls += 1
+            return FlexResult(ok=True, trades=[], fetched_at=datetime.now())
+
+        monkeypatch.setattr(cache_mod.flex, "fetch", counting)
+        result = asyncio.run(cache_mod.get_flex(2024, config=self._config(tmp_path, token="new")))
+
+        assert calls == 0, "a rotated token bought a free attempt against an active lockout"
+        assert "1025" in result.error
+
+    def test_a_lockout_blocks_every_year_not_just_the_one_that_tripped_it(
+        self, tmp_path, monkeypatch
+    ):
+        """1025 attaches to the token. Tracked per year, the History page would
+        walk into it one year at a time, each attempt resetting the clock."""
+        import asyncio
+
+        from ibkr_pnl import cache as cache_mod
+
+        config = self._config(tmp_path)
+        self._restart(cache_mod)
+        self._fail_once(
+            cache_mod, config, monkeypatch, "Flex error 1025: Too many failed attempts."
+        )
+
+        calls = 0
+
+        async def counting(config, window=None):
+            nonlocal calls
+            calls += 1
+            return FlexResult(ok=True, trades=[], fetched_at=datetime.now())
+
+        monkeypatch.setattr(cache_mod.flex, "fetch", counting)
+        # A different year, and an explicit download -- the strongest case for
+        # going out to IBKR, and still the wrong thing to do during a lockout.
+        result = asyncio.run(
+            cache_mod.get_flex(2022, force_refresh=True, config=config)
+        )
+
+        assert calls == 0, "a download of another year walked into the lockout"
+        assert "1025" in result.error
+
+    def test_corrupt_state_does_not_break_the_fetch(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from ibkr_pnl import cache as cache_mod
+
+        config = self._config(tmp_path)
+        cache_mod._backoff_path(config).write_text("{not json", encoding="utf-8")
+        self._restart(cache_mod)
+
+        async def ok_fetch(config, window=None):
+            return FlexResult(ok=True, trades=[], fetched_at=datetime.now())
+
+        monkeypatch.setattr(cache_mod.flex, "fetch", ok_fetch)
+        result = asyncio.run(cache_mod.get_flex(2024, config=config))
+
+        assert result.ok
+
+
+class TestCurrentYearUsesTheSavedTemplate:
+    """The saved Flex Query is itself a Year to Date template. Overriding it
+    with fd/td for the current year would only reproduce, with more ways to
+    fail, what asking for nothing already gets for free. A closed year has no
+    such template to lean on -- there the override is load-bearing."""
+
+    def _config(self, tmp_path):
+        return Settings(flex_token="t", flex_query_id="q", cache_dir=tmp_path)
+
+    def test_the_current_year_is_requested_with_no_window(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from ibkr_pnl import cache as cache_mod
+
+        cache_mod._failed_at.clear()
+        cache_mod._failures.clear()
+        cache_mod._last_error.clear()
+        cache_mod._backoff_loaded = False
+        config = self._config(tmp_path)
+
+        seen_window = "not called"
+
+        async def capturing(config, window=None):
+            nonlocal seen_window
+            seen_window = window
+            return FlexResult(ok=True, trades=[], fetched_at=datetime.now())
+
+        monkeypatch.setattr(cache_mod.flex, "fetch", capturing)
+        current_year = date.today().year
+        asyncio.run(cache_mod.get_flex(current_year, config=config))
+
+        assert seen_window is None
+
+    def test_a_past_year_still_gets_an_explicit_window(self, tmp_path, monkeypatch):
+        import asyncio
+
+        from ibkr_pnl import cache as cache_mod
+
+        cache_mod._failed_at.clear()
+        cache_mod._failures.clear()
+        cache_mod._last_error.clear()
+        cache_mod._backoff_loaded = False
+        config = self._config(tmp_path)
+
+        seen_window = "not called"
+
+        async def capturing(config, window=None):
+            nonlocal seen_window
+            seen_window = window
+            return FlexResult(ok=True, trades=[], fetched_at=datetime.now())
+
+        monkeypatch.setattr(cache_mod.flex, "fetch", capturing)
+        past_year = date.today().year - 1
+        asyncio.run(cache_mod.get_flex(past_year, config=config))
+
+        assert seen_window == (date(past_year, 1, 1), date(past_year, 12, 31))
+
+
 class TestWindowValidation:
     def test_rejects_a_window_longer_than_flex_allows(self):
         """Caught locally rather than spending a request to be told no.
