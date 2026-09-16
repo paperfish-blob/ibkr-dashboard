@@ -12,7 +12,17 @@
    * it changes what's rendered, not what's counted; the day header's count
    * and total, and the eyebrow's trade count, still reflect every execution.
    */
-  import { fmtFullDate, fmtMoney, fmtPriceLike, fmtQty, num, toneOf, EM_DASH } from "$lib/format";
+  import {
+    fmtFullDate,
+    fmtMoney,
+    fmtPriceLike,
+    fmtQty,
+    num,
+    sideClass,
+    sideLabel,
+    toneOf,
+    EM_DASH,
+  } from "$lib/format";
   import type { DayGroup, RealizedTrade } from "$lib/api";
   import type { TxFilter } from "$lib/stores";
 
@@ -128,18 +138,6 @@
   /** The day band spans everything left of its trade-count and total cells. */
   const dayRowSpan = $derived(totalCols - 2);
 
-  function sideLabel(buySell: string): string {
-    const s = buySell.toUpperCase();
-    if (s === "BUY") return "Bought";
-    if (s === "SELL") return "Sold";
-    return buySell || EM_DASH;
-  }
-  function sideClass(buySell: string): string {
-    const s = buySell.toUpperCase();
-    if (s === "BUY") return "buy";
-    if (s === "SELL") return "sell";
-    return "";
-  }
 </script>
 
 <div class="panel">

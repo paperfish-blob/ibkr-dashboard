@@ -115,6 +115,8 @@ export interface PositionLeg {
   fill_count: number;
   realized_pnl: DecimalString;
   commission: DecimalString;
+  /** "" when every fill shares one order, or the Flex Query omits IB Order ID. */
+  ib_order_id: string;
   /** Share of the position's total size this exit accounts for. Exit legs
    *  only -- null on entry legs. */
   pct_of_position: DecimalString | null;
@@ -140,6 +142,8 @@ export interface Position {
   exit_count: number;
   /** null while open with nothing realized yet. */
   realized_pnl: DecimalString | null;
+  /** Summed across every entry and exit leg. */
+  commission: DecimalString;
   entry_legs: PositionLeg[];
   exit_legs: PositionLeg[];
 }

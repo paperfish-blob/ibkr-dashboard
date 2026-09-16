@@ -5,7 +5,17 @@
    * become these -- this component only renders what the backend already
    * reconstructed.
    */
-  import { fmtDay, fmtMoney, fmtPriceLike, fmtQty, num, toneOf, EM_DASH } from "$lib/format";
+  import {
+    fmtFullDate,
+    fmtMoney,
+    fmtPriceLike,
+    fmtQty,
+    num,
+    sideClass,
+    sideLabel,
+    toneOf,
+    EM_DASH,
+  } from "$lib/format";
   import type { Position, PositionLeg } from "$lib/api";
 
   interface Props {
@@ -22,13 +32,21 @@
     expanded = next;
   }
 
-  function legs(p: Position): PositionLeg[] {
-    return p.exit_legs;
+  /** Newest exit first, matching the rest of the app -- but numbered by
+   *  when it actually happened, not by screen position, so "Exit 1" still
+   *  means the first exit rather than the most recent one. */
+  function numberedLegs(p: Position): { leg: PositionLeg; n: number }[] {
+    return p.exit_legs.map((leg, i) => ({ leg, n: i + 1 })).reverse();
   }
 
-  function fmtDateTime(iso: string | null, time: string): string {
-    if (!iso) return EM_DASH;
-    return time ? `${fmtDay(iso)}, ${time}` : fmtDay(iso);
+  /** Gross trade value, same convention as the ledger's Amount column --
+   *  positive for a buy, negative for a sell -- derived from price * qty
+   *  since a position's price is already a weighted average, not a single
+   *  execution's own trade_money. */
+  function amount(price: string | null, quantity: string, buySell: string): number | null {
+    if (price === null) return null;
+    const sign = buySell.toUpperCase() === "SELL" ? -1 : 1;
+    return sign * num(price) * num(quantity);
   }
 </script>
 
@@ -42,21 +60,25 @@
           <tr>
             <th class="chev-col"></th>
             <th>Symbol</th>
-            <th>Side</th>
             <th>Date</th>
             <th>Time</th>
-            <th class="num">Price</th>
+            <th>Order ID</th>
+            <th>Side</th>
             <th class="num">Qty</th>
+            <th class="num">Price</th>
+            <th class="num">Amount</th>
+            <th class="num">Comm.</th>
             <th>Exit Date</th>
             <th class="num">Exits #</th>
             <th class="num">Pos %</th>
-            <th class="num">Total P&amp;L</th>
+            <th class="num">Realized P&amp;L</th>
           </tr>
         </thead>
         <tbody>
           {#each positions as p, i (p.symbol + (p.open_date ?? "") + p.open_time + (p.exit_date ?? "") + p.direction + i)}
-            {@const canExpand = legs(p).length > 0}
+            {@const canExpand = p.exit_legs.length > 0}
             {@const isExpanded = expanded.has(i)}
+            {@const entryAmount = amount(p.entry_price, p.quantity, p.direction === "short" ? "SELL" : "BUY")}
             <tr
               class="pos-row"
               class:open={p.is_open}
@@ -71,6 +93,9 @@
                 {/if}
               </td>
               <td class="sym">{p.symbol} <span class="tag">{p.asset_category}</span></td>
+              <td class="full-date">{p.open_date ? fmtFullDate(p.open_date) : EM_DASH}</td>
+              <td class="dim">{p.open_time || EM_DASH}</td>
+              <td class="num dash">{EM_DASH}</td>
               <td>
                 <span class="dir {p.direction}">{p.direction.toUpperCase()}</span>
                 {#if p.is_carry_in}
@@ -79,11 +104,11 @@
                   </span>
                 {/if}
               </td>
-              <td>{p.open_date ? fmtDay(p.open_date) : EM_DASH}</td>
-              <td class="dim">{p.open_time || EM_DASH}</td>
-              <td class="num">{p.entry_price !== null ? fmtPriceLike(num(p.entry_price), currency, 4) : EM_DASH}</td>
               <td class="num">{fmtQty(num(p.quantity))}</td>
-              <td class={p.exit_date ? "" : "dash"}>{p.exit_date ? fmtDay(p.exit_date) : EM_DASH}</td>
+              <td class="num">{p.entry_price !== null ? fmtPriceLike(num(p.entry_price), currency, 4) : EM_DASH}</td>
+              <td class="num">{entryAmount !== null ? fmtPriceLike(entryAmount, currency, 2) : EM_DASH}</td>
+              <td class="num dim">{num(p.commission) !== 0 ? fmtPriceLike(Math.abs(num(p.commission)), currency, 2) : EM_DASH}</td>
+              <td class="full-date {p.exit_date ? '' : 'dash'}">{p.exit_date ? fmtFullDate(p.exit_date) : EM_DASH}</td>
               <td class="num">{p.exit_count || EM_DASH}</td>
               <td class="num dash">{EM_DASH}</td>
               <td class="num pnl {p.realized_pnl === null ? '' : toneOf(num(p.realized_pnl))}">
@@ -92,18 +117,22 @@
             </tr>
 
             {#if isExpanded}
-              {#each legs(p) as leg, li (li)}
+              {#each numberedLegs(p) as { leg, n } (n)}
+                {@const legAmount = amount(leg.price, leg.quantity, leg.buy_sell)}
                 <tr class="leg-row">
                   <td></td>
-                  <td class="leg-label">Exit {li + 1}</td>
-                  <td><span class="dir {leg.buy_sell.toUpperCase() === 'BUY' ? 'buy' : 'sell'}">{leg.buy_sell.toUpperCase()}</span></td>
-                  <td>{fmtDay(leg.trade_date)}</td>
+                  <td class="leg-label">Exit {n}</td>
+                  <td class="full-date">{fmtFullDate(leg.trade_date)}</td>
                   <td class="dim">{leg.trade_time || EM_DASH}</td>
-                  <td class="num">
-                    {leg.price !== null ? fmtPriceLike(num(leg.price), p.currency, 4) : EM_DASH}
-                    {#if leg.fill_count > 1}<span class="fills">×{leg.fill_count}</span>{/if}
+                  <td class="num dim order-id">{leg.ib_order_id || EM_DASH}</td>
+                  <td>
+                    <span class="side {sideClass(leg.buy_sell)}">{sideLabel(leg.buy_sell)}</span>
+                    {#if leg.fill_count > 1}<span class="fills">×{leg.fill_count} fills</span>{/if}
                   </td>
                   <td class="num">−{fmtQty(num(leg.quantity))}</td>
+                  <td class="num">{leg.price !== null ? fmtPriceLike(num(leg.price), p.currency, 4) : EM_DASH}</td>
+                  <td class="num">{legAmount !== null ? fmtPriceLike(legAmount, p.currency, 2) : EM_DASH}</td>
+                  <td class="num dim">{num(leg.commission) !== 0 ? fmtPriceLike(Math.abs(num(leg.commission)), p.currency, 2) : EM_DASH}</td>
                   <td></td>
                   <td></td>
                   <td class="num">{leg.pct_of_position !== null ? `${num(leg.pct_of_position).toFixed(1)}%` : EM_DASH}</td>
@@ -174,6 +203,20 @@
   td.dash {
     color: var(--dim-35);
   }
+  td.order-id {
+    font-size: var(--text-2xs);
+    color: var(--dim-45);
+  }
+  td.full-date {
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--dim-70);
+  }
+  td.full-date.dash {
+    color: var(--dim-35);
+  }
 
   tr.pos-row {
     cursor: pointer;
@@ -223,12 +266,14 @@
     background: var(--ai-bg);
     color: var(--ai);
   }
-  .dir.buy {
-    background: var(--accent-bg);
+
+  .side {
+    font-weight: var(--weight-semibold);
+  }
+  .side.buy {
     color: var(--accent);
   }
-  .dir.sell {
-    background: var(--dn-bg);
+  .side.sell {
     color: var(--dn);
   }
 

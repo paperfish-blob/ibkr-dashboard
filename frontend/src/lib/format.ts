@@ -20,6 +20,24 @@ export function toneOf(n: number): Tone {
   return "flat";
 }
 
+/** "BUY"/"SELL" (however the Flex Query cases it) -> "Bought"/"Sold". Shared
+ *  by the Transactions and Positions pages so a trade reads the same word
+ *  wherever it shows up. */
+export function sideLabel(buySell: string): string {
+  const s = buySell.toUpperCase();
+  if (s === "BUY") return "Bought";
+  if (s === "SELL") return "Sold";
+  return buySell || EM_DASH;
+}
+
+/** CSS class for sideLabel's counterpart -- "buy" / "sell" / "". */
+export function sideClass(buySell: string): string {
+  const s = buySell.toUpperCase();
+  if (s === "BUY") return "buy";
+  if (s === "SELL") return "sell";
+  return "";
+}
+
 /** DecimalString -> number. Pydantic sends Decimals as strings; this is the
  *  single place that conversion is allowed to happen sloppily. */
 export function num(value: DecimalString | number | null | undefined): number {
