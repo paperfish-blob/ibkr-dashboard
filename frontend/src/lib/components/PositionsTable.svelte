@@ -10,13 +10,14 @@
     fmtMoney,
     fmtPriceLike,
     fmtQty,
+    grossAmount,
     num,
     sideClass,
     sideLabel,
     toneOf,
     EM_DASH,
   } from "$lib/format";
-  import type { Position, PositionLeg } from "$lib/api";
+  import { positionDetailParams, type Position, type PositionLeg } from "$lib/api";
   import type { PosGroupBy } from "$lib/stores";
 
   interface Props {
@@ -46,16 +47,6 @@
    *  means the first exit rather than the most recent one. */
   function numberedLegs(p: Position): { leg: PositionLeg; n: number }[] {
     return p.exit_legs.map((leg, i) => ({ leg, n: i + 1 })).reverse();
-  }
-
-  /** Gross trade value, same convention as the ledger's Amount column --
-   *  positive for a buy, negative for a sell -- derived from price * qty
-   *  since a position's price is already a weighted average, not a single
-   *  execution's own trade_money. */
-  function amount(price: string | null, quantity: string, buySell: string): number | null {
-    if (price === null) return null;
-    const sign = buySell.toUpperCase() === "SELL" ? -1 : 1;
-    return sign * num(price) * num(quantity);
   }
 
   interface Row {
@@ -136,7 +127,7 @@
           {#each group.rows as { p, i } (p.symbol + (p.open_date ?? "") + p.open_time + (p.exit_date ?? "") + p.direction + i)}
             {@const canExpand = p.exit_legs.length > 0}
             {@const isExpanded = expanded.has(i)}
-            {@const entryAmount = amount(p.entry_price, p.quantity, p.direction === "short" ? "SELL" : "BUY")}
+            {@const entryAmount = grossAmount(p.entry_price, p.quantity, p.direction === "short" ? "SELL" : "BUY")}
             <tr
               class="pos-row"
               class:open={p.is_open}
@@ -150,7 +141,16 @@
                   </svg>
                 {/if}
               </td>
-              <td class="sym">{p.symbol} <span class="tag">{p.asset_category}</span></td>
+              <td class="sym">
+                <a
+                  class="sym-link"
+                  href="/positions/detail?{positionDetailParams(p)}"
+                  onclick={(e) => e.stopPropagation()}
+                >
+                  {p.symbol}
+                </a>
+                <span class="tag">{p.asset_category}</span>
+              </td>
               <td class="num">{p.exit_count || EM_DASH}</td>
               <td class="full-date">{p.open_date ? fmtFullDate(p.open_date) : EM_DASH}</td>
               <td class="dim">{p.open_time || EM_DASH}</td>
@@ -176,7 +176,7 @@
 
             {#if isExpanded}
               {#each numberedLegs(p) as { leg, n } (n)}
-                {@const legAmount = amount(leg.price, leg.quantity, leg.buy_sell)}
+                {@const legAmount = grossAmount(leg.price, leg.quantity, leg.buy_sell)}
                 <tr class="leg-row">
                   <td></td>
                   <td></td>
@@ -327,6 +327,14 @@
 
   .sym {
     font-weight: var(--weight-bold);
+  }
+  .sym-link {
+    color: var(--text);
+    text-decoration: none;
+  }
+  .sym-link:hover {
+    color: var(--accent);
+    text-decoration: underline;
   }
   .sym .tag {
     font-size: var(--text-2xs);

@@ -148,6 +148,34 @@ export interface Position {
   exit_legs: PositionLeg[];
 }
 
+/** Position has no id of its own; these fields together identify one well
+ *  enough in practice, and are what the detail page's URL carries. */
+export function positionDetailParams(p: Position): URLSearchParams {
+  return new URLSearchParams({
+    symbol: p.symbol,
+    open: p.open_date ?? "",
+    openTime: p.open_time,
+    exit: p.exit_date ?? "",
+    dir: p.direction,
+  });
+}
+
+/** The inverse of positionDetailParams -- resolves the detail page's query
+ *  string back to the position it names. */
+export function findPositionByParams(
+  positions: Position[],
+  params: URLSearchParams,
+): Position | undefined {
+  return positions.find(
+    (p) =>
+      p.symbol === params.get("symbol") &&
+      (p.open_date ?? "") === (params.get("open") ?? "") &&
+      p.open_time === (params.get("openTime") ?? "") &&
+      (p.exit_date ?? "") === (params.get("exit") ?? "") &&
+      p.direction === params.get("dir"),
+  );
+}
+
 export interface PositionsResponse {
   /** Most recent activity first. */
   positions: Position[];

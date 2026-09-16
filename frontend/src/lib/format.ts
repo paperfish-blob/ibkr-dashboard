@@ -45,6 +45,21 @@ export function num(value: DecimalString | number | null | undefined): number {
   return Number(value);
 }
 
+/** Gross trade value -- positive for a buy, negative for a sell -- derived
+ *  from price * quantity rather than a stored trade_money, since a
+ *  position's leg price is already a weighted average across its fills, not
+ *  any single execution's own amount. Shared by the Positions table and its
+ *  detail page. */
+export function grossAmount(
+  price: DecimalString | null,
+  quantity: DecimalString,
+  buySell: string,
+): number | null {
+  if (price === null) return null;
+  const sign = buySell.toUpperCase() === "SELL" ? -1 : 1;
+  return sign * num(price) * num(quantity);
+}
+
 /** Signed currency: "+$1,234.56" / "-$1,234.56". Zero shows unsigned. */
 export function fmtMoney(value: number, currency = "USD"): string {
   return new Intl.NumberFormat("en-US", {
