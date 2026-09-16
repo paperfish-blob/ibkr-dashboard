@@ -76,12 +76,14 @@ def test_parses_the_ledger_fields_when_the_query_includes_them():
     assert aapl.order_type == "LMT"
     assert aapl.notes_codes == "C"
     assert aapl.exchange == "SMART"
+    assert aapl.ib_order_id == "1234567890"
 
     nvda = trades["NVDA"]
     assert nvda.trade_time == ""
     assert nvda.trade_price is None
     assert nvda.trade_money is None
     assert nvda.order_type == ""
+    assert nvda.ib_order_id == ""
 
 
 def test_trades_come_back_in_date_order():

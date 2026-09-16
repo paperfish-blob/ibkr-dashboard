@@ -178,6 +178,7 @@ def parse_statement(xml_text: str) -> FlexResult:
                 order_type=(_first(node, "orderType") or "").strip(),
                 notes_codes=(_first(node, "notes", "codes") or "").strip(),
                 exchange=(_first(node, "exchange", "listingExchange") or "").strip(),
+                ib_order_id=(node.get("ibOrderID") or "").strip(),
             )
         )
 

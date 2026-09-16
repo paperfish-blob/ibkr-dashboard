@@ -40,6 +40,7 @@ class RealizedTrade(BaseModel):
     order_type: str = ""
     notes_codes: str = ""  # e.g. "O", "C", "P" -- opening/closing/partial
     exchange: str = ""
+    ib_order_id: str = ""  # shared by every execution that filled one order
 
     @computed_field  # type: ignore[prop-decorator]
     @property

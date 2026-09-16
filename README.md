@@ -71,6 +71,9 @@ Client Portal → **Performance & Reports** → **Flex Queries** → new
   Trade Price, Trade Money, Order Type, Notes/Codes, Exchange, Asset Class.
   Skip these and the ledger still works — those columns just render blank
   for rows missing the field.
+- **Field needed to group partial fills:** IB Order ID. Every execution that
+  filled the same order shares this value; skip it and the "Group fills"
+  toggle has nothing to group by, so each execution stays its own row.
 - **Date range:** Year to Date
 - **Format:** XML
 
