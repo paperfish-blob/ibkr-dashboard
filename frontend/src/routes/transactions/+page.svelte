@@ -24,6 +24,7 @@
   const FILTERS = [
     { label: "All trades", value: "all" },
     { label: "Realized only", value: "realized" },
+    { label: "Opening only", value: "opening" },
   ];
 
   // Every trade shares the account's currency in practice; a genuinely

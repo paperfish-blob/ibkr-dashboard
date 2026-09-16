@@ -73,7 +73,7 @@ export async function refreshTransactions(): Promise<void> {
 
 // ── Preferences ───────────────────────────────────────────────────────────────
 
-export type TxFilter = "all" | "realized";
+export type TxFilter = "all" | "realized" | "opening";
 
 /** Ledger filter. Defaults to showing every execution, opens included, the
  *  way IBKR's own apps do. Persisted so the choice survives a reload. */

@@ -2,10 +2,11 @@
   /**
    * Per-trade ledger, grouped by day.
    *
-   * The "Realized only" filter hides opening trades client-side; a day left
-   * with nothing is dropped entirely rather than rendering an empty header.
-   * Day and grand totals are the same either way -- an opening trade's
-   * realized_pnl is exactly 0 -- so only the counts move.
+   * "Realized only" / "Opening only" split trades client-side on
+   * is_realizing; a day left with nothing is dropped entirely rather than
+   * rendering an empty header. Day and grand totals are the same across all
+   * three filters -- an opening trade's realized_pnl is exactly 0 -- so only
+   * the counts move.
    */
   import { fmtFullDate, fmtMoney, fmtPriceLike, fmtQty, num, toneOf, EM_DASH } from "$lib/format";
   import type { DayGroup } from "$lib/api";
@@ -19,11 +20,14 @@
   let { days, filter, currency = "USD" }: Props = $props();
 
   const visible = $derived(
-    filter === "realized"
+    filter === "all"
       ? days
-          .map((d) => ({ ...d, trades: d.trades.filter((t) => t.is_realizing) }))
-          .filter((d) => d.trades.length > 0)
-      : days,
+      : days
+          .map((d) => ({
+            ...d,
+            trades: d.trades.filter((t) => (filter === "realized" ? t.is_realizing : !t.is_realizing)),
+          }))
+          .filter((d) => d.trades.length > 0),
   );
 
   const tradeCount = $derived(visible.reduce((n, d) => n + d.trades.length, 0));
@@ -78,7 +82,7 @@
     <div class="hd-left">
       <div class="eyebrow">
         {tradeCount.toLocaleString()}
-        {filter === "realized" ? "realizing trades" : "executions"}
+        {filter === "realized" ? "realizing trades" : filter === "opening" ? "opening trades" : "executions"}
       </div>
       <div class="title">Transactions</div>
     </div>
