@@ -17,12 +17,14 @@
     EM_DASH,
   } from "$lib/format";
   import type { Position, PositionLeg } from "$lib/api";
+  import type { PosGroupBy } from "$lib/stores";
 
   interface Props {
     positions: Position[];
     currency?: string;
+    groupBy?: PosGroupBy;
   }
-  let { positions, currency = "USD" }: Props = $props();
+  let { positions, currency = "USD", groupBy = "exit" }: Props = $props();
 
   let expanded = $state<Set<number>>(new Set());
   function toggle(i: number) {
@@ -31,6 +33,13 @@
     else next.add(i);
     expanded = next;
   }
+  // Switching how rows are grouped reshuffles every index, so a previously
+  // expanded row would otherwise land on whatever position now sits at that
+  // index -- the wrong row appears open instead of nothing.
+  $effect(() => {
+    void groupBy;
+    expanded = new Set();
+  });
 
   /** Newest exit first, matching the rest of the app -- but numbered by
    *  when it actually happened, not by screen position, so "Exit 1" still
@@ -58,16 +67,26 @@
     rows: Row[];
   }
 
-  /** Day bands, same as the ledger's -- grouped by exit date, or open date
-   *  for a position that hasn't closed anything yet. `positions` already
-   *  arrives most-recent-activity-first, so consecutive same-day positions
-   *  are already adjacent; this only has to notice the boundaries. Indexes
-   *  are assigned before grouping so expand/collapse state (keyed by index)
-   *  stays unique across groups. */
+  /** The date a position's day band keys off, in the current mode --
+   *  falling back the same way either direction: a carry-in has no entry
+   *  date to group by, and a position with no exits yet has no exit date. */
+  function groupDate(p: Position): string {
+    return groupBy === "entry" ? (p.open_date ?? p.exit_date ?? "") : (p.exit_date ?? p.open_date ?? "");
+  }
+
+  /** Day bands, same as the ledger's. `positions` arrives most-recent-
+   *  activity-first, which only clusters same-day rows together in exit
+   *  mode -- entry mode re-sorts by open date first so same-day opens land
+   *  adjacent too. Indexes are assigned after sorting so expand/collapse
+   *  state (keyed by index) stays unique. */
   const displayGroups = $derived.by(() => {
+    const ordered =
+      groupBy === "entry"
+        ? [...positions].sort((a, b) => groupDate(b).localeCompare(groupDate(a)))
+        : positions;
     const groups: DayGroup[] = [];
-    positions.forEach((p, i) => {
-      const date = p.exit_date ?? p.open_date ?? "";
+    ordered.forEach((p, i) => {
+      const date = groupDate(p);
       const last = groups.at(-1);
       if (last && last.date === date) last.rows.push({ p, i });
       else groups.push({ date, rows: [{ p, i }] });

@@ -119,6 +119,14 @@ export const posSymbols = persisted<string[]>("ibkr.pos.symbols", []);
  *  carry-in can be either open or closed. Off by default. */
 export const posCarryInOnly = persisted<boolean>("ibkr.pos.carryInOnly", false);
 
+export type PosGroupBy = "exit" | "entry";
+
+/** Which date the Positions table's day bands key off. "exit" matches money
+ *  actually realized that day (same as Overview); "entry" groups by when a
+ *  position was opened, so it shows how a day's opens eventually turned out
+ *  even if some took days to close. */
+export const posGroupBy = persisted<PosGroupBy>("ibkr.pos.groupBy", "exit");
+
 /** Selected period: "all" or a four-digit year. Shared by Overview,
  *  Transactions and Positions so the choice follows you between them.
  *  Defaults to "all" so a freshly downloaded year shows up without anyone

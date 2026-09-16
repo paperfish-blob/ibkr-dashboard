@@ -16,7 +16,9 @@
     posFilter,
     posSymbols,
     posCarryInOnly,
+    posGroupBy,
     type PosFilter,
+    type PosGroupBy,
   } from "$lib/stores";
 
   const POLL_MS = 30_000;
@@ -26,6 +28,11 @@
     { label: "All", value: "all" },
     { label: "Open only", value: "open" },
     { label: "Closed only", value: "closed" },
+  ];
+
+  const GROUP_BY = [
+    { label: "Exit date", value: "exit" },
+    { label: "Entry date", value: "entry" },
   ];
 
   // Every position shares the account's currency in practice; a genuinely
@@ -106,25 +113,33 @@
         active={$posSymbols}
         onChange={(next) => posSymbols.set(next)}
       />
-      {#if carryInCount > 0}
-        <button
-          class="carry-toggle"
-          class:active={$posCarryInOnly}
-          onclick={() => posCarryInOnly.update((v) => !v)}
-          title="Positions whose opening trade is outside the fetched date range"
-        >
-          <span class="box"></span>
-          Carry-in only
-          <span class="count">{carryInCount}</span>
-        </button>
-      {/if}
+      <div class="toolbar-right">
+        {#if carryInCount > 0}
+          <button
+            class="carry-toggle"
+            class:active={$posCarryInOnly}
+            onclick={() => posCarryInOnly.update((v) => !v)}
+            title="Positions whose opening trade is outside the fetched date range"
+          >
+            <span class="box"></span>
+            Carry-in only
+            <span class="count">{carryInCount}</span>
+          </button>
+        {/if}
+        <span class="group-label">Group by</span>
+        <SegToggle
+          options={GROUP_BY}
+          active={$posGroupBy}
+          onChange={(v) => posGroupBy.set(v as PosGroupBy)}
+        />
+      </div>
     </div>
   {/if}
 
   {#if $positionsLoading && !$positions}
     <SkeletonCard height={480} rows={8} />
   {:else if $positions}
-    <PositionsTable positions={filtered} {currency} />
+    <PositionsTable positions={filtered} {currency} groupBy={$posGroupBy} />
   {:else}
     <div class="panel-empty">
       Could not load positions. Check that the backend is running on port 9001.
@@ -160,6 +175,19 @@
     gap: 12px;
     flex-wrap: wrap;
     margin-bottom: 14px;
+  }
+  .toolbar-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .group-label {
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--dim-45);
   }
   .carry-toggle {
     display: inline-flex;
