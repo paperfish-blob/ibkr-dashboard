@@ -40,7 +40,14 @@
   const previewCache = new Map<number, string>();
   let tooltip = $state<{ year: number; x: number; y: number } | null>(null);
   let tooltipText = $state<string | null>(null);
-  let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+  let showTimer: ReturnType<typeof setTimeout> | null = null;
+  // The tooltip's content is usually taller than TOOLTIP_MAX_HEIGHT (two
+  // pretty-printed trades run well past it) and scrolls internally, which
+  // means it has to accept the mouse -- so leaving the link can't close it
+  // immediately, or the cursor could never reach the tooltip to scroll it.
+  // hideTimer is the grace period that gets it there: closing is deferred
+  // long enough for the mouse to land on the tooltip, which cancels it.
+  let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
   const TOOLTIP_WIDTH = 380;
   const TOOLTIP_MAX_HEIGHT = 280;
@@ -60,11 +67,25 @@
     return { x, y };
   }
 
+  function cancelHide() {
+    if (hideTimer) clearTimeout(hideTimer);
+    hideTimer = null;
+  }
+
+  function scheduleHide() {
+    cancelHide();
+    hideTimer = setTimeout(() => {
+      tooltip = null;
+      tooltipText = null;
+    }, 150);
+  }
+
   function onViewEnter(year: number, e: MouseEvent) {
+    cancelHide();
     const anchor = e.currentTarget as HTMLElement;
     // A short delay: a cursor merely passing over the link on its way
     // elsewhere should not fire a request.
-    hoverTimer = setTimeout(() => {
+    showTimer = setTimeout(() => {
       tooltip = { year, ...placeTooltip(anchor) };
       tooltipText = previewCache.get(year) ?? null;
       if (previewCache.has(year)) return;
@@ -83,10 +104,11 @@
   }
 
   function onViewLeave() {
-    if (hoverTimer) clearTimeout(hoverTimer);
-    hoverTimer = null;
-    tooltip = null;
-    tooltipText = null;
+    if (showTimer) clearTimeout(showTimer);
+    showTimer = null;
+    // Deferred, not immediate: gives the cursor time to reach the tooltip
+    // itself, whose own mouseenter (below) cancels this if it does.
+    scheduleHide();
   }
 
   async function start(year: number) {
@@ -129,7 +151,8 @@
   // is no point polling for a page nobody is looking at either.
   onDestroy(() => {
     stopHistoryPoll();
-    if (hoverTimer) clearTimeout(hoverTimer);
+    if (showTimer) clearTimeout(showTimer);
+    cancelHide();
   });
 </script>
 
@@ -235,7 +258,12 @@
 </div>
 
 {#if tooltip}
-  <div class="json-tooltip" style="left: {tooltip.x}px; top: {tooltip.y}px;">
+  <div
+    class="json-tooltip"
+    style="left: {tooltip.x}px; top: {tooltip.y}px;"
+    onmouseenter={cancelHide}
+    onmouseleave={scheduleHide}
+  >
     {#if tooltipText === null}
       <span class="dim">Loading preview…</span>
     {:else}
@@ -435,7 +463,12 @@
 
   /* Fixed, not absolute: the table sits inside .scroll (overflow-x: auto),
      which would clip an absolutely-positioned child. Position is computed in
-     script from the hovered link's own bounding rect. */
+     script from the hovered link's own bounding rect.
+
+     Content is usually taller than max-height (two pretty-printed trades run
+     well past it), so this scrolls -- which means it has to accept the
+     mouse. Its own mouseenter/mouseleave (in script) keep it from closing
+     out from under a cursor that has moved onto it to do that. */
   .json-tooltip {
     position: fixed;
     z-index: 50;
@@ -447,7 +480,6 @@
     border: 1px solid var(--border-10);
     border-radius: var(--radius-md);
     box-shadow: 0 12px 32px rgba(0, 0, 0, 0.16);
-    pointer-events: none;
   }
   .json-tooltip pre {
     margin: 0;
