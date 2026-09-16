@@ -110,6 +110,7 @@
           <tr>
             <th class="chev-col"></th>
             <th>Symbol</th>
+            <th class="num">Exits #</th>
             <th>Date</th>
             <th>Time</th>
             <th>Order ID</th>
@@ -119,7 +120,6 @@
             <th class="num">Amount</th>
             <th class="num">Comm.</th>
             <th>Exit Date</th>
-            <th class="num">Exits #</th>
             <th class="num">Pos %</th>
             <th class="num">Realized P&amp;L</th>
           </tr>
@@ -151,6 +151,7 @@
                 {/if}
               </td>
               <td class="sym">{p.symbol} <span class="tag">{p.asset_category}</span></td>
+              <td class="num">{p.exit_count || EM_DASH}</td>
               <td class="full-date">{p.open_date ? fmtFullDate(p.open_date) : EM_DASH}</td>
               <td class="dim">{p.open_time || EM_DASH}</td>
               <td class="num dash">{EM_DASH}</td>
@@ -167,7 +168,6 @@
               <td class="num">{entryAmount !== null ? fmtPriceLike(entryAmount, currency, 2) : EM_DASH}</td>
               <td class="num dim">{num(p.commission) !== 0 ? fmtPriceLike(Math.abs(num(p.commission)), currency, 2) : EM_DASH}</td>
               <td class="full-date {p.exit_date ? '' : 'dash'}">{p.exit_date ? fmtFullDate(p.exit_date) : EM_DASH}</td>
-              <td class="num">{p.exit_count || EM_DASH}</td>
               <td class="num dash">{EM_DASH}</td>
               <td class="num pnl {p.realized_pnl === null ? '' : toneOf(num(p.realized_pnl))}">
                 {p.realized_pnl === null ? "open" : fmtMoney(num(p.realized_pnl), currency)}
@@ -178,6 +178,7 @@
               {#each numberedLegs(p) as { leg, n } (n)}
                 {@const legAmount = amount(leg.price, leg.quantity, leg.buy_sell)}
                 <tr class="leg-row">
+                  <td></td>
                   <td></td>
                   <td class="leg-label">Exit {n}</td>
                   <td class="full-date">{fmtFullDate(leg.trade_date)}</td>
@@ -191,7 +192,6 @@
                   <td class="num">{leg.price !== null ? fmtPriceLike(num(leg.price), p.currency, 4) : EM_DASH}</td>
                   <td class="num">{legAmount !== null ? fmtPriceLike(legAmount, p.currency, 2) : EM_DASH}</td>
                   <td class="num dim">{num(leg.commission) !== 0 ? fmtPriceLike(Math.abs(num(leg.commission)), p.currency, 2) : EM_DASH}</td>
-                  <td></td>
                   <td></td>
                   <td class="num">{leg.pct_of_position !== null ? `${num(leg.pct_of_position).toFixed(1)}%` : EM_DASH}</td>
                   <td class="num pnl {toneOf(num(leg.realized_pnl))}">{fmtMoney(num(leg.realized_pnl), p.currency)}</td>
@@ -399,7 +399,7 @@
   .leg-label {
     color: var(--dim-45);
     font-weight: var(--weight-semibold);
-    padding-left: 38px;
+    text-align: right;
   }
   .fills {
     font-size: var(--text-2xs);
