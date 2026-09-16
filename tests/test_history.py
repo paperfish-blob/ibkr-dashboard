@@ -41,6 +41,17 @@ class TestYearWindow:
 
 
 class TestHistoryYears:
+    def test_default_depth_reaches_five_years_back(self):
+        config = Settings()
+        assert config.history_years(today=date(2026, 9, 15)) == [
+            2026,
+            2025,
+            2024,
+            2023,
+            2022,
+            2021,
+        ]
+
     def test_offers_current_year_plus_the_configured_depth(self):
         config = Settings(flex_history_years=4)
         assert config.history_years(today=date(2026, 9, 15)) == [2026, 2025, 2024, 2023, 2022]

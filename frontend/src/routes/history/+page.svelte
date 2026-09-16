@@ -75,9 +75,11 @@
   <AlertBar messages={[$historyError, note]} />
 
   <div class="intro">
-    IBKR serves the four previous calendar years plus the current one. A year is
-    downloaded once and kept — a closed year never changes, so it is never
-    re-fetched. Downloads run one at a time and take 10–40 seconds each.
+    IBKR serves the five previous calendar years plus the current one, though a
+    year at the far end of that range may come back empty if it predates the
+    account's own Flex retention. A year is downloaded once and kept — a
+    closed year never changes, so it is never re-fetched. Downloads run one at
+    a time and take 10–40 seconds each.
   </div>
 
   {#if !$history}

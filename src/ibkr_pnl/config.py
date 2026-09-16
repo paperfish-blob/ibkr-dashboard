@@ -26,9 +26,12 @@ class Settings(BaseSettings):
     cache_dir: Path = PROJECT_ROOT / ".cache"
 
     # Calendar years of history offered on the History page, in addition to the
-    # current one. IBKR keeps the four previous calendar years plus the current,
-    # so 4 is the most it can serve -- asking for more just yields empty years.
-    flex_history_years: int = 4
+    # current one. IBKR is documented to keep the four previous calendar years
+    # plus the current, so a year past that is expected to come back empty or
+    # with an error like the one 2022 already gets (Flex error 1003) -- that's
+    # IBKR's own retention limit, not a bug here. Override via .env
+    # (FLEX_HISTORY_YEARS) if a given account turns out to keep more.
+    flex_history_years: int = 5
 
     # A year that has only just closed is not safe to treat as immutable: Flex
     # lags settlement by a day or two, so its final trades may not have landed
