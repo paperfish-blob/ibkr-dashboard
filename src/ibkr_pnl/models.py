@@ -116,6 +116,63 @@ class TransactionsResponse(BaseModel):
     years_covered: list[int] = []
 
 
+class PositionLeg(BaseModel):
+    """One order's contribution to a position -- entry (added to it) or exit
+    (reduced it). Already collapsed across that order's partial fills, the
+    same as the transaction ledger's "Group fills" view. quantity is always
+    a positive magnitude; direction lives on the parent Position."""
+
+    trade_date: date
+    trade_time: str
+    buy_sell: str
+    price: Decimal | None
+    quantity: Decimal
+    fill_count: int
+    realized_pnl: Decimal
+    commission: Decimal
+    # Share of the position's total size this exit accounts for. Exit legs
+    # only -- an entry leg is part of *opening* the size, not closing it.
+    pct_of_position: Decimal | None = None
+
+
+class Position(BaseModel):
+    """One round trip: a symbol's net quantity moving away from zero and
+    (usually) back. See positions.build_positions for how trades are split
+    into these."""
+
+    symbol: str
+    asset_category: str
+    currency: str
+    direction: Literal["long", "short"]
+    is_open: bool
+    # True when the very first trade we see for this symbol already closes
+    # something (realized_pnl != 0) -- the opening trade happened before the
+    # fetched date range, so open_date/open_time/entry_price are unknown
+    # rather than guessed.
+    is_carry_in: bool
+    open_date: date | None
+    open_time: str
+    entry_price: Decimal | None
+    quantity: Decimal  # position size -- see positions.py for open/closed semantics
+    exit_date: date | None
+    exit_count: int
+    realized_pnl: Decimal | None  # None while open with nothing realized yet
+    entry_legs: list[PositionLeg]
+    exit_legs: list[PositionLeg]
+
+
+class PositionsResponse(BaseModel):
+    """What GET /api/positions returns."""
+
+    positions: list[Position]  # most recent activity first
+    flex_ok: bool
+    flex_error: str = ""
+    flex_fetched_at: datetime | None = None
+    account_id: str = ""
+    period: str = "all"
+    years_covered: list[int] = []
+
+
 class PnLResponse(BaseModel):
     """What GET /api/pnl returns."""
 

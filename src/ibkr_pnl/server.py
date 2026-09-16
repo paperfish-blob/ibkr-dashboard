@@ -11,10 +11,10 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from . import aggregate, cache
+from . import aggregate, cache, positions as posmod
 from .config import PROJECT_ROOT, settings
 from .history import HistoryStatus, manager
-from .models import FlexResult, PnLResponse, TransactionsResponse
+from .models import FlexResult, PnLResponse, PositionsResponse, TransactionsResponse
 from .sources.gateway import monitor
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -60,6 +60,21 @@ async def get_transactions(period: str = PERIOD_QUERY):
     flex_result, years = await cache.get_period(period)
     response = aggregate.group_transactions(flex_result)
     return response.model_copy(update={"period": period, "years_covered": years})
+
+
+@app.get("/api/positions", response_model=PositionsResponse)
+async def get_positions(period: str = PERIOD_QUERY):
+    """Trades reconstructed into round-trip positions -- see positions.py."""
+    flex_result, years = await cache.get_period(period)
+    return PositionsResponse(
+        positions=posmod.build_positions(flex_result),
+        flex_ok=flex_result.ok,
+        flex_error=flex_result.error,
+        flex_fetched_at=flex_result.fetched_at,
+        account_id=flex_result.account_id,
+        period=period,
+        years_covered=years,
+    )
 
 
 @app.get("/api/history", response_model=HistoryStatus)
