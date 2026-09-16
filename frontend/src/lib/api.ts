@@ -219,6 +219,28 @@ export interface RawStatement {
   error: string;
 }
 
+/** One daily price bar. A plain number, not DecimalString -- this is chart
+ *  display data, not an accounting figure. */
+export interface OHLCVBar {
+  time: IsoDate;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+/** What GET /api/market-data/ohlcv returns. `ok: false` is the normal state
+ *  whenever Yahoo Finance doesn't recognize the symbol -- not every symbol
+ *  will have a chart, and that's expected rather than an error to surface
+ *  loudly. */
+export interface MarketDataResult {
+  ok: boolean;
+  symbol: string;
+  bars: OHLCVBar[];
+  error: string;
+}
+
 const BASE = "";
 
 async function get<T>(path: string): Promise<T> {
@@ -244,6 +266,10 @@ export const api = {
   positions: (period = "all"): Promise<PositionsResponse> =>
     get<PositionsResponse>(`/api/positions?period=${encodeURIComponent(period)}`),
   history: (): Promise<HistoryStatus> => get<HistoryStatus>("/api/history"),
+  marketDataOhlcv: (symbol: string, lookbackDays = 270): Promise<MarketDataResult> =>
+    get<MarketDataResult>(
+      `/api/market-data/ohlcv?symbol=${encodeURIComponent(symbol)}&lookback_days=${lookbackDays}`,
+    ),
   /** `started` is false when a download is already running -- only one runs
    *  at a time, and the message says which year holds the slot. */
   downloadYear: (year: number): Promise<{ started: boolean; message: string }> =>

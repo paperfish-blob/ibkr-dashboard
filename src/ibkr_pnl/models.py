@@ -178,6 +178,31 @@ class PositionsResponse(BaseModel):
     years_covered: list[int] = []
 
 
+class OHLCVBar(BaseModel):
+    """One daily price bar. Plain float, not Decimal -- this is chart display
+    data with no accounting precision requirement, and matches the market-data
+    service's own numeric type as-is rather than round-tripping through a
+    string for no benefit."""
+
+    time: date
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: int
+
+
+class MarketDataResult(BaseModel):
+    """What GET /api/market-data/ohlcv returns. `ok=False` is the normal
+    state for a symbol Yahoo Finance doesn't recognize -- see
+    sources/market_data.py."""
+
+    ok: bool
+    symbol: str = ""  # the plain ticker actually queried, after CFD-suffix stripping
+    bars: list[OHLCVBar] = []
+    error: str = ""
+
+
 class PnLResponse(BaseModel):
     """What GET /api/pnl returns."""
 

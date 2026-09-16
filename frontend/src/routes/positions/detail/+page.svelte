@@ -13,6 +13,7 @@
   import PageHeader from "$lib/components/PageHeader.svelte";
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
   import AlertBar from "$lib/components/AlertBar.svelte";
+  import SymbolChart from "$lib/components/SymbolChart.svelte";
   import {
     fmtFullDate,
     fmtMoney,
@@ -25,7 +26,7 @@
     toneOf,
     EM_DASH,
   } from "$lib/format";
-  import { findPositionByParams, type PositionLeg } from "$lib/api";
+  import { api, findPositionByParams, type MarketDataResult, type OHLCVBar, type PositionLeg } from "$lib/api";
   import { positions, positionsLoading, positionsError, refreshPositions } from "$lib/stores";
 
   const POLL_MS = 30_000;
@@ -67,6 +68,65 @@
       refreshing = false;
     }
   }
+
+  // The chart is a separate, optional data source (see market_data.py) --
+  // fetched once the position (and so its symbol) resolves, independent of
+  // the position/transaction data's own refresh cycle.
+  let marketData = $state<MarketDataResult | null>(null);
+  let marketDataLoading = $state(false);
+  $effect(() => {
+    const symbol = position?.symbol;
+    if (!symbol) return;
+    marketDataLoading = true;
+    api
+      .marketDataOhlcv(symbol)
+      .then((r) => (marketData = r))
+      .catch(
+        (e) =>
+          (marketData = {
+            ok: false,
+            symbol,
+            bars: [],
+            error: e instanceof Error ? e.message : "Failed to load chart",
+          }),
+      )
+      .finally(() => (marketDataLoading = false));
+  });
+
+  /** Trading-day lookback, not calendar days -- 21/63/126/252 approximate a
+   *  month/quarter/half-year/year of sessions. Close enough for a summary
+   *  tile; not meant to match any vendor's own period math exactly. */
+  function pctChangeAt(bars: OHLCVBar[], tradingDaysBack: number): number | null {
+    if (bars.length < 2) return null;
+    const lastIdx = bars.length - 1;
+    const idx = lastIdx - tradingDaysBack;
+    if (idx < 0) return null;
+    const base = bars[idx].close;
+    if (base === 0) return null;
+    return ((bars[lastIdx].close - base) / base) * 100;
+  }
+  function pctChangeYTD(bars: OHLCVBar[]): number | null {
+    if (bars.length < 2) return null;
+    const lastYear = bars[bars.length - 1].time.slice(0, 4);
+    const idx = bars.findIndex((b) => b.time.slice(0, 4) === lastYear);
+    if (idx < 0) return null;
+    const base = bars[idx].close;
+    if (base === 0) return null;
+    return ((bars[bars.length - 1].close - base) / base) * 100;
+  }
+  const periodReturns = $derived.by(() => {
+    const bars = marketData?.bars ?? [];
+    return [
+      { key: "1D", value: pctChangeAt(bars, 1) },
+      { key: "5D", value: pctChangeAt(bars, 5) },
+      { key: "1M", value: pctChangeAt(bars, 21) },
+      { key: "3M", value: pctChangeAt(bars, 63) },
+      { key: "6M", value: pctChangeAt(bars, 126) },
+      { key: "1Y", value: pctChangeAt(bars, 252) },
+      { key: "YTD", value: pctChangeYTD(bars) },
+    ];
+  });
+  const headlineReturn = $derived(periodReturns.find((p) => p.key === "3M") ?? periodReturns[0]);
 
   onMount(() => {
     refreshPositions();
@@ -195,21 +255,45 @@
 
       <div class="panel">
         <div class="chart-toolbar">
-          <span class="chart-title">{position.symbol}</span>
-          <span class="chart-sub">
-            {position.open_date ? fmtFullDate(position.open_date) : "Unknown open"} –
-            {position.exit_date ? fmtFullDate(position.exit_date) : "still open"}
-          </span>
-        </div>
-        <div class="chart-empty">
-          <div class="chart-empty-title">No price chart available yet</div>
-          <div class="chart-empty-body">
-            This dashboard only fetches trade fills and P&amp;L (Flex statements and IB Gateway) -- it has no
-            market-data source to draw a price chart from. Gateway's own API does support historical bars, but
-            Gateway needs a daily interactive login and is disconnected most of the time, so a chart wired to it
-            would often show nothing anyway.
+          <div>
+            <span class="chart-title">1D</span>
+            <span class="chart-sub">Daily Chart</span>
           </div>
+          {#if marketData?.ok}
+            <div class="chart-headline">
+              <div class="chart-headline-val {toneOf(headlineReturn.value ?? 0)}">
+                {headlineReturn.value !== null
+                  ? `${headlineReturn.value >= 0 ? "+" : ""}${headlineReturn.value.toFixed(2)}%`
+                  : EM_DASH}
+              </div>
+              <div class="chart-headline-sub">{headlineReturn.key}</div>
+            </div>
+          {/if}
         </div>
+
+        {#if marketDataLoading}
+          <SkeletonCard height={280} rows={0} />
+        {:else if marketData?.ok}
+          <SymbolChart history={marketData.bars} height={280} />
+          <div class="ret-tiles">
+            {#each periodReturns as { key, value } (key)}
+              <div class="ret-tile" class:active={key === headlineReturn.key}>
+                <div class="ret-key">{key}</div>
+                <div class="ret-val {value !== null ? toneOf(value) : ''}">
+                  {value !== null ? `${value >= 0 ? "+" : ""}${value.toFixed(1)}%` : EM_DASH}
+                </div>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <div class="chart-empty">
+            <div class="chart-empty-title">No price chart available for {position.symbol}</div>
+            <div class="chart-empty-body">
+              {marketData?.error ||
+                "This dashboard only fetches trade fills and P&L (Flex statements and IB Gateway) -- charting needs a separate market-data source, which isn't reachable right now."}
+            </div>
+          </div>
+        {/if}
       </div>
     </div>
   {:else}
@@ -412,7 +496,8 @@
 
   .chart-toolbar {
     display: flex;
-    align-items: baseline;
+    align-items: flex-start;
+    justify-content: space-between;
     gap: 8px;
     padding: 12px 18px;
     border-bottom: 1px solid var(--border-05);
@@ -424,7 +509,74 @@
   .chart-sub {
     font-size: var(--text-2xs);
     color: var(--dim-45);
+    margin-left: 6px;
   }
+  .chart-headline {
+    text-align: right;
+  }
+  .chart-headline-val {
+    font-size: var(--text-2lg);
+    font-weight: var(--weight-bold);
+    letter-spacing: -0.01em;
+    font-variant-numeric: tabular-nums;
+  }
+  .chart-headline-val.pos {
+    color: var(--up);
+  }
+  .chart-headline-val.neg {
+    color: var(--dn);
+  }
+  .chart-headline-val.flat {
+    color: var(--text);
+  }
+  .chart-headline-sub {
+    font-size: var(--text-2xs);
+    color: var(--dim-45);
+  }
+
+  .ret-tiles {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 8px;
+    padding: 14px 18px 18px;
+  }
+  .ret-tile {
+    padding: 8px 10px;
+    border-radius: var(--radius-md);
+    background: var(--surface-02);
+    border: 1px solid var(--border-05);
+  }
+  .ret-tile.active {
+    background: var(--up-bg);
+    border-color: var(--up);
+  }
+  .ret-key {
+    font-size: var(--text-2xs);
+    color: var(--dim-55);
+    letter-spacing: 0.1em;
+    font-weight: var(--weight-semibold);
+  }
+  .ret-val {
+    font-size: var(--text-md);
+    font-weight: var(--weight-bold);
+    font-variant-numeric: tabular-nums;
+    margin-top: 2px;
+  }
+  .ret-val.pos {
+    color: var(--up);
+  }
+  .ret-val.neg {
+    color: var(--dn);
+  }
+  .ret-val.flat {
+    color: var(--text);
+  }
+  @media (max-width: 640px) {
+    .ret-tiles {
+      grid-template-columns: repeat(4, 1fr);
+    }
+  }
+
   .chart-empty {
     padding: 60px 40px;
     text-align: center;

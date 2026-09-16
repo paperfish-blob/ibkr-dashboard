@@ -14,7 +14,8 @@ from fastapi.staticfiles import StaticFiles
 from . import aggregate, cache, positions as posmod
 from .config import PROJECT_ROOT, settings
 from .history import HistoryStatus, manager
-from .models import FlexResult, PnLResponse, PositionsResponse, TransactionsResponse
+from .models import FlexResult, MarketDataResult, PnLResponse, PositionsResponse, TransactionsResponse
+from .sources import market_data
 from .sources.gateway import monitor
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -75,6 +76,12 @@ async def get_positions(period: str = PERIOD_QUERY):
         period=period,
         years_covered=years,
     )
+
+
+@app.get("/api/market-data/ohlcv", response_model=MarketDataResult)
+async def get_market_data_ohlcv(symbol: str, lookback_days: int = Query(270, ge=1, le=3650)):
+    """Daily bars for the Positions detail page's chart, via yfinance."""
+    return await market_data.fetch_ohlcv(symbol, lookback_days=lookback_days)
 
 
 @app.get("/api/history", response_model=HistoryStatus)
