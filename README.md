@@ -46,6 +46,15 @@ cd frontend && npm run dev                       # terminal 2
 Open <http://localhost:5173> for hot reload. Run `npm run build` again when
 you want the `:9001` build to pick the changes up.
 
+`frontend/build/` is gitignored, so switching branches does **not** touch it —
+the `:9001` server keeps serving whatever was last built, even a page whose
+route no longer exists on the branch you're now on. Rebuild after checking
+out a different branch:
+
+```bash
+cd frontend && rm -rf build .svelte-kit && npm run build
+```
+
 ## Setup
 
 ### 1. Flex Query
