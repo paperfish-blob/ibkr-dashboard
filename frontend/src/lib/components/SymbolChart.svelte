@@ -19,11 +19,23 @@
     PARABOLIC_COLORS,
   } from "$lib/indicators";
 
+  interface TradeMarker {
+    time: string;
+    label: string;
+    color: string;
+    shape?: "arrowUp" | "arrowDown";
+    position?: "aboveBar" | "belowBar";
+  }
+
   interface Props {
     history: OHLCVBar[];
     height?: number;
     visibleMonths?: number;
-    markerDate?: string;
+    /** Entry/exit fills to annotate on the chart. */
+    tradeMarkers?: TradeMarker[];
+    /** Initial visible window, e.g. the trade's own entry-to-exit span with
+     *  some padding -- takes priority over visibleMonths/fitContent. */
+    focusRange?: { from: string; to: string };
     /** Paint the per-bar trend-regime background behind the candles. */
     regimeBands?: boolean;
     /** Absolute Price Strength columns along the bottom of the pane. */
@@ -35,7 +47,8 @@
     history,
     height = 280,
     visibleMonths,
-    markerDate,
+    tradeMarkers,
+    focusRange,
     regimeBands = false,
     apsPane = true,
     extendedAlerts = true,
@@ -190,14 +203,16 @@
       });
     }
 
-    if (markerDate) {
-      markers.push({
-        time: markerDate as unknown as Time,
-        position: "aboveBar",
-        color: "#0c0d10",
-        shape: "arrowDown",
-        text: markerDate,
-      });
+    if (tradeMarkers) {
+      for (const m of tradeMarkers) {
+        markers.push({
+          time: m.time as unknown as Time,
+          position: m.position ?? "aboveBar",
+          color: m.color,
+          shape: m.shape ?? "arrowDown",
+          text: m.label,
+        });
+      }
     }
 
     if (markers.length) {
@@ -207,7 +222,12 @@
 
     const applyDefaultView = () => {
       if (!chart) return;
-      if (visibleMonths) {
+      if (focusRange) {
+        chart.timeScale().setVisibleRange({
+          from: Math.floor(new Date(focusRange.from).getTime() / 1000) as unknown as Time,
+          to: Math.floor(new Date(focusRange.to).getTime() / 1000) as unknown as Time,
+        });
+      } else if (visibleMonths) {
         const to = new Date(bars[bars.length - 1].time);
         const from = new Date(bars[bars.length - 1].time);
         from.setMonth(from.getMonth() - visibleMonths);

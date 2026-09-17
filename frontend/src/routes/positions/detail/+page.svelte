@@ -69,6 +69,74 @@
     }
   }
 
+  // MA200 needs 200 *trading* days of prior closes before its first point --
+  // at this app's own trading-day/calendar-day ratio (252 sessions ≈ 365
+  // days, see pctChangeAt below), that's ~290 days, rounded up generously to
+  // 400 so the average isn't cutting it close in a holiday-heavy stretch.
+  const MA200_WARMUP_DAYS = 400;
+  const MAX_LOOKBACK_DAYS = 3650; // matches the backend's Query(..., le=3650)
+
+  // How far back to fetch: enough trailing history from today to reach past
+  // this position's own open date plus the MA200 warm-up, not just a fixed
+  // recent window -- a trade from months or years ago still needs its own
+  // entry to be inside the fetched range. Falls back to the default window
+  // for a carry-in position, whose true open date is unknown.
+  const lookbackDays = $derived.by(() => {
+    if (!position?.open_date) return 270;
+    const daysSinceOpen = Math.ceil((Date.now() - new Date(position.open_date).getTime()) / 86_400_000);
+    return Math.min(MAX_LOOKBACK_DAYS, daysSinceOpen + MA200_WARMUP_DAYS);
+  });
+
+  // Entry/exit fills plotted on the chart, colored the same as the
+  // transaction list's own buy/sell sides.
+  const tradeMarkers = $derived.by(() => {
+    if (!position) return [];
+    return txRows.map(({ kind, leg, n }) => {
+      const isSell = sideClass(leg.buy_sell) === "sell";
+      return {
+        time: leg.trade_date,
+        label: `${kind === "entry" ? "E" : "X"}${n}`,
+        color: isSell ? "#ef4444" : "#5b6cff",
+        shape: isSell ? ("arrowDown" as const) : ("arrowUp" as const),
+        position: isSell ? ("aboveBar" as const) : ("belowBar" as const),
+      };
+    });
+  });
+
+  // Default view: the trade's own entry-to-exit span (or to today, while
+  // still open), padded a few weeks on each side for context -- not
+  // whatever's most recent, which for an old, closed trade would show
+  // nothing but flat, unrelated price action. A trade held only a couple of
+  // weeks would otherwise pad out to a barely-wider window, stretching a
+  // handful of candles across the whole panel with no room for the MAs to
+  // show a trend -- so the window is widened, centered on the trade's own
+  // midpoint, to a floor of MIN_FOCUS_DAYS (matching the "3M" headline tile)
+  // when the padded span comes in under that.
+  const FOCUS_PADDING_DAYS = 20;
+  const MIN_FOCUS_DAYS = 90;
+  const DAY_MS = 86_400_000;
+  const focusRange = $derived.by(() => {
+    if (!position) return undefined;
+    const dates = [...position.entry_legs, ...position.exit_legs].map((l) => l.trade_date);
+    if (!dates.length) return undefined;
+    const openMs = new Date(dates.reduce((a, b) => (a < b ? a : b))).getTime();
+    const closeMs = position.is_open
+      ? Date.now()
+      : new Date(dates.reduce((a, b) => (a > b ? a : b))).getTime();
+
+    let fromMs = openMs - FOCUS_PADDING_DAYS * DAY_MS;
+    let toMs = closeMs + FOCUS_PADDING_DAYS * DAY_MS;
+
+    const minSpanMs = MIN_FOCUS_DAYS * DAY_MS;
+    if (toMs - fromMs < minSpanMs) {
+      const midMs = (openMs + closeMs) / 2;
+      fromMs = midMs - minSpanMs / 2;
+      toMs = midMs + minSpanMs / 2;
+    }
+
+    return { from: new Date(fromMs).toISOString().slice(0, 10), to: new Date(toMs).toISOString().slice(0, 10) };
+  });
+
   // The chart is a separate, optional data source (see market_data.py) --
   // fetched once the position (and so its symbol) resolves, independent of
   // the position/transaction data's own refresh cycle.
@@ -79,7 +147,7 @@
     if (!symbol) return;
     marketDataLoading = true;
     api
-      .marketDataOhlcv(symbol)
+      .marketDataOhlcv(symbol, lookbackDays)
       .then((r) => (marketData = r))
       .catch(
         (e) =>
@@ -274,7 +342,7 @@
         {#if marketDataLoading}
           <SkeletonCard height={280} rows={0} />
         {:else if marketData?.ok}
-          <SymbolChart history={marketData.bars} height={280} />
+          <SymbolChart history={marketData.bars} height={280} {tradeMarkers} {focusRange} />
           <div class="ret-tiles">
             {#each periodReturns as { key, value } (key)}
               <div class="ret-tile" class:active={key === headlineReturn.key}>
