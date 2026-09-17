@@ -60,6 +60,60 @@
       : null,
   );
 
+  // Clicking a transaction row pins a price line on the chart at that leg's
+  // fill price -- click again (or switch symbol) to clear it.
+  let selectedTx = $state<{ kind: "entry" | "exit"; n: number } | null>(null);
+  $effect(() => {
+    position?.symbol;
+    selectedTx = null;
+  });
+  function toggleSelectedTx(kind: "entry" | "exit", n: number) {
+    selectedTx = selectedTx?.kind === kind && selectedTx?.n === n ? null : { kind, n };
+  }
+  // Once a row is selected, Up/Down steps to the neighboring row -- txRows
+  // is already in the same newest-first order the list renders in, so
+  // "next in the array" is "down on screen".
+  function stepSelectedTx(delta: 1 | -1) {
+    if (!selectedTx) return;
+    const i = txRows.findIndex((r) => r.kind === selectedTx!.kind && r.n === selectedTx!.n);
+    const next = txRows[i + delta];
+    if (!next) return;
+    selectedTx = { kind: next.kind, n: next.n };
+    document.getElementById(txRowId(next.kind, next.n))?.scrollIntoView({ block: "nearest" });
+  }
+  function txRowId(kind: "entry" | "exit", n: number) {
+    return `tx-row-${kind}-${n}`;
+  }
+  function handleTxKeydown(e: KeyboardEvent) {
+    if (!selectedTx) return;
+    if (e.key === "ArrowDown") {
+      e.preventDefault();
+      stepSelectedTx(1);
+    } else if (e.key === "ArrowUp") {
+      e.preventDefault();
+      stepSelectedTx(-1);
+    }
+  }
+  // A click anywhere outside a transaction row clears the selection -- the
+  // row's own click (handled by toggleSelectedTx) already ran by the time
+  // this bubbles up to window, so this only fires for clicks that started
+  // outside every row.
+  function handleOutsideClick(e: MouseEvent) {
+    if (selectedTx && !(e.target as HTMLElement).closest(".tx-row")) {
+      selectedTx = null;
+    }
+  }
+  const selectedMarker = $derived.by(() => {
+    if (!selectedTx) return null;
+    const row = txRows.find((r) => r.kind === selectedTx!.kind && r.n === selectedTx!.n);
+    if (!row || row.leg.price === null) return null;
+    return {
+      price: num(row.leg.price),
+      label: `${selectedTx.kind === "entry" ? "Entry" : "Exit"} ${selectedTx.n} · ${fmtPriceLike(num(row.leg.price), position!.currency, 4)}`,
+      color: sideClass(row.leg.buy_sell) === "sell" ? "#ef4444" : "#5b6cff",
+    };
+  });
+
   async function handleRefresh() {
     refreshing = true;
     try {
@@ -208,7 +262,13 @@
   onMount(() => {
     refreshPositions();
     const id = setInterval(() => refreshPositions(), POLL_MS);
-    return () => clearInterval(id);
+    window.addEventListener("keydown", handleTxKeydown);
+    window.addEventListener("click", handleOutsideClick);
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("keydown", handleTxKeydown);
+      window.removeEventListener("click", handleOutsideClick);
+    };
   });
 </script>
 
@@ -305,13 +365,19 @@
         <div class="tx-list">
           {#each txRows as { kind, leg, n } (kind + n)}
             {@const legAmount = grossAmount(leg.price, leg.quantity, leg.buy_sell)}
-            <div class="tx-row">
+            <div
+              id={txRowId(kind, n)}
+              class="tx-row"
+              class:selected={selectedTx?.kind === kind && selectedTx?.n === n}
+              onclick={() => toggleSelectedTx(kind, n)}
+            >
               <div class="tx-left">
                 <span class="tx-label">{kind === "entry" ? "Entry" : "Exit"} {n}</span>
                 <span class="side {sideClass(leg.buy_sell)}">{sideLabel(leg.buy_sell)}</span>
                 {#if leg.fill_count > 1}<span class="fills">×{leg.fill_count} fills</span>{/if}
               </div>
               <div class="tx-right">
+                <div class="tx-meta">{fmtFullDate(leg.trade_date)}, {leg.trade_time || EM_DASH}</div>
                 <div class="tx-px">
                   {fmtQty(num(leg.quantity))} @ {leg.price !== null ? fmtPriceLike(num(leg.price), position.currency, 4) : EM_DASH}
                   {#if legAmount !== null}
@@ -323,7 +389,6 @@
                     <span class="tx-pnl dash">{EM_DASH}</span>
                   {/if}
                 </div>
-                <div class="tx-meta">{fmtFullDate(leg.trade_date)}, {leg.trade_time || EM_DASH}</div>
               </div>
             </div>
           {/each}
@@ -351,7 +416,7 @@
         {#if marketDataLoading}
           <SkeletonCard height={280} rows={0} />
         {:else if marketData?.ok}
-          <SymbolChart history={marketData.bars} height={280} {tradeMarkers} {focusRange} />
+          <SymbolChart history={marketData.bars} height={280} {tradeMarkers} {focusRange} {selectedMarker} />
           <div class="ret-tiles">
             {#each periodReturns as { key, value } (key)}
               <div class="ret-tile" class:active={key === headlineReturn.key}>
@@ -516,6 +581,13 @@
     padding: 9px 18px;
     border-top: 1px solid var(--border-05);
     font-size: var(--text-xs);
+    cursor: pointer;
+  }
+  .tx-row:hover {
+    background: var(--surface-02);
+  }
+  .tx-row.selected {
+    background: var(--accent-bg);
   }
   .tx-left {
     display: flex;

@@ -7,7 +7,16 @@
    * crosshair sync (this page only ever shows one chart at a time).
    */
   import { onDestroy } from "svelte";
-  import { createChart, type IChartApi, type SeriesMarker, type Time, CrosshairMode } from "lightweight-charts";
+  import {
+    createChart,
+    LineStyle,
+    type IChartApi,
+    type IPriceLine,
+    type ISeriesApi,
+    type SeriesMarker,
+    type Time,
+    CrosshairMode,
+  } from "lightweight-charts";
   import type { OHLCVBar } from "$lib/api";
   import {
     calcEMA,
@@ -36,6 +45,9 @@
     /** Initial visible window, e.g. the trade's own entry-to-exit span with
      *  some padding -- takes priority over visibleMonths/fitContent. */
     focusRange?: { from: string; to: string };
+    /** A single fill to call out with a horizontal price line, e.g. the
+     *  transaction row the user just clicked. */
+    selectedMarker?: { price: number; label: string; color: string } | null;
     /** Paint the per-bar trend-regime background behind the candles. */
     regimeBands?: boolean;
     /** Absolute Price Strength columns along the bottom of the pane. */
@@ -49,6 +61,7 @@
     visibleMonths,
     tradeMarkers,
     focusRange,
+    selectedMarker,
     regimeBands = false,
     apsPane = true,
     extendedAlerts = true,
@@ -58,6 +71,14 @@
 
   let container: HTMLDivElement | undefined = $state();
   let chart: IChartApi | null = null;
+  let candles: ISeriesApi<"Candlestick"> | null = null;
+  // Bumped once the chart (re)builds, so the price-line effect below re-runs
+  // and re-attaches after a rebuild, not just when selectedMarker changes.
+  // Written from a plain counter, never read-then-incremented in place --
+  // `chartVersion++` inside the same effect that sets it would make that
+  // effect both read and write its own dependency, looping forever.
+  let chartVersionCounter = 0;
+  let chartVersion = $state(0);
   let resizeObs: ResizeObserver | null = null;
 
   let restoreView: (() => void) | null = null;
@@ -116,7 +137,7 @@
       );
     }
 
-    const candles = chart.addCandlestickSeries();
+    candles = chart.addCandlestickSeries({ priceLineVisible: false });
     candles.setData(
       bars.map((b) => ({
         time: b.time as unknown as Time,
@@ -273,6 +294,30 @@
       }
     });
     resizeObs.observe(container);
+
+    chartVersionCounter += 1;
+    chartVersion = chartVersionCounter;
+  });
+
+  let priceLine: IPriceLine | null = null;
+  $effect(() => {
+    chartVersion;
+    const marker = selectedMarker;
+    if (!candles) return;
+    if (priceLine) {
+      candles.removePriceLine(priceLine);
+      priceLine = null;
+    }
+    if (marker) {
+      priceLine = candles.createPriceLine({
+        price: marker.price,
+        color: marker.color,
+        lineWidth: 2,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: marker.label,
+      });
+    }
   });
 
   onDestroy(() => {
