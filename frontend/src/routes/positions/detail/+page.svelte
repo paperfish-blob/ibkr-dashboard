@@ -110,10 +110,10 @@
   // weeks would otherwise pad out to a barely-wider window, stretching a
   // handful of candles across the whole panel with no room for the MAs to
   // show a trend -- so the window is widened, centered on the trade's own
-  // midpoint, to a floor of MIN_FOCUS_DAYS (matching the "3M" headline tile)
-  // when the padded span comes in under that.
+  // midpoint, to a floor of MIN_FOCUS_DAYS when the padded span comes in
+  // under that.
   const FOCUS_PADDING_DAYS = 20;
-  const MIN_FOCUS_DAYS = 90;
+  const MIN_FOCUS_DAYS = 120;
   const DAY_MS = 86_400_000;
   const focusRange = $derived.by(() => {
     if (!position) return undefined;
@@ -132,6 +132,15 @@
       const midMs = (openMs + closeMs) / 2;
       fromMs = midMs - minSpanMs / 2;
       toMs = midMs + minSpanMs / 2;
+    }
+
+    // A trade closed only a few days ago would otherwise widen out into the
+    // future, past today, where there's no price data -- push the overrun
+    // onto `from` instead, trading blank space for real trailing history.
+    const todayMs = Date.now();
+    if (toMs > todayMs) {
+      fromMs -= toMs - todayMs;
+      toMs = todayMs;
     }
 
     return { from: new Date(fromMs).toISOString().slice(0, 10), to: new Date(toMs).toISOString().slice(0, 10) };
