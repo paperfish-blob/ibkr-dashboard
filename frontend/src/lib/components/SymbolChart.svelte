@@ -95,6 +95,23 @@
   let interactAbort: AbortController | null = null;
   let viewMoved = $state(false);
 
+  // Only the hovered month's own candles get recolored, to a deepened
+  // version of whichever hue they'd already be -- every other candle gets
+  // no color override at all, so it stays exactly the library's normal
+  // up/down color whether or not a month is highlighted. The spotlight
+  // scrim below is what mutes everything else; the candles outside the
+  // selected month don't need their own separate treatment too.
+  const MONTH_UP_COLOR = "#00796b";
+  const MONTH_DOWN_COLOR = "#c62828";
+  function candleData(bars: OHLCVBar[], month: string | null | undefined) {
+    return bars.map((b) => {
+      const base = { time: b.time as unknown as Time, open: b.open, high: b.high, low: b.low, close: b.close };
+      if (!month || !b.time.startsWith(month)) return base;
+      const color = b.close >= b.open ? MONTH_UP_COLOR : MONTH_DOWN_COLOR;
+      return { ...base, color, wickColor: color, borderColor: color };
+    });
+  }
+
   // A hovered month gets a window this many days wider than the month
   // itself on each side, so there's context around it rather than the
   // month's own bars alone filling the whole plot edge to edge.
@@ -165,15 +182,7 @@
     }
 
     candles = chart.addCandlestickSeries({ priceLineVisible: false });
-    candles.setData(
-      bars.map((b) => ({
-        time: b.time as unknown as Time,
-        open: b.open,
-        high: b.high,
-        low: b.low,
-        close: b.close,
-      })),
-    );
+    candles.setData(candleData(bars, highlightMonth));
 
     const times = bars.map((b) => b.time as unknown as Time);
     const closes = bars.map((b) => b.close);
@@ -373,6 +382,7 @@
         color: !month || b.time.startsWith(month) ? "rgba(0,0,0,0)" : "rgba(255,255,255,0.68)",
       })),
     );
+    candles?.setData(candleData(history, month));
     // Zoom into the highlighted month's own window rather than leaving the
     // chart at its wider default view, where one month can be a sliver a
     // few px wide -- then put the view back once the hover clears.
