@@ -102,6 +102,10 @@ export const txFilter = persisted<TxFilter>("ibkr.tx.filter", "all");
  *  nothing rather than erroring, same as any other empty-result state. */
 export const txSymbols = persisted<string[]>("ibkr.tx.symbols", []);
 
+/** Months to show in the ledger, as "YYYY-MM" keys. Empty means every month,
+ *  same convention as txSymbols. */
+export const txMonths = persisted<string[]>("ibkr.tx.months", []);
+
 /** Collapse an order's partial fills into one ledger row. Off by default --
  *  it changes numbers people are used to reading per-execution (price,
  *  time), so it should be an opt-in rather than a surprise on load. */

@@ -3,6 +3,7 @@
   import PageHeader from "$lib/components/PageHeader.svelte";
   import SegToggle from "$lib/components/SegToggle.svelte";
   import SymbolFilter from "$lib/components/SymbolFilter.svelte";
+  import MonthFilter from "$lib/components/MonthFilter.svelte";
   import TransactionLedger from "$lib/components/TransactionLedger.svelte";
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
   import AlertBar from "$lib/components/AlertBar.svelte";
@@ -15,6 +16,7 @@
     refreshTransactions,
     txFilter,
     txSymbols,
+    txMonths,
     txGroupFills,
     type TxFilter,
   } from "$lib/stores";
@@ -41,16 +43,28 @@
     return m;
   });
 
-  // Symbol filter narrows the trades within each day, so the day's total has
-  // to be recomputed from what's left -- unlike the realized-only filter, an
-  // excluded symbol's P&L is real money leaving the sum, not an opening
-  // trade's guaranteed zero.
-  const symbolFilteredDays = $derived.by(() => {
+  // "YYYY-MM" -> trade count, independent of any active filter -- same as
+  // symbolCounts, the full universe for the period so the picker doesn't
+  // shrink as filters get applied.
+  const monthCounts = $derived.by(() => {
+    const m = new Map<string, number>();
+    for (const d of $transactions?.days ?? []) {
+      const key = d.date.slice(0, 7);
+      m.set(key, (m.get(key) ?? 0) + d.trades.length);
+    }
+    return m;
+  });
+
+  // Symbol and month filters narrow the trades within each day, so the
+  // day's total has to be recomputed from what's left -- unlike the
+  // realized-only filter, an excluded symbol/month's P&L is real money
+  // leaving the sum, not an opening trade's guaranteed zero.
+  const filteredDays = $derived.by(() => {
     const days = $transactions?.days ?? [];
-    if ($txSymbols.length === 0) return days;
     return days
+      .filter((d) => $txMonths.length === 0 || $txMonths.includes(d.date.slice(0, 7)))
       .map((d) => {
-        const trades = d.trades.filter((t) => $txSymbols.includes(t.symbol));
+        const trades = $txSymbols.length === 0 ? d.trades : d.trades.filter((t) => $txSymbols.includes(t.symbol));
         const total_pnl = String(trades.reduce((sum, t) => sum + num(t.realized_pnl), 0));
         return { ...d, trades, total_pnl };
       })
@@ -119,11 +133,18 @@
 
   {#if $transactions}
     <div class="toolbar">
-      <SymbolFilter
-        counts={symbolCounts}
-        active={$txSymbols}
-        onChange={(next) => txSymbols.set(next)}
-      />
+      <div class="filters-left">
+        <SymbolFilter
+          counts={symbolCounts}
+          active={$txSymbols}
+          onChange={(next) => txSymbols.set(next)}
+        />
+        <MonthFilter
+          counts={monthCounts}
+          active={$txMonths}
+          onChange={(next) => txMonths.set(next)}
+        />
+      </div>
       {#if hasPartialFills}
         <button
           class="group-toggle"
@@ -141,7 +162,7 @@
   {#if $transactionsLoading && !$transactions}
     <SkeletonCard height={480} rows={8} />
   {:else if $transactions}
-    <TransactionLedger days={symbolFilteredDays} filter={$txFilter} groupFills={$txGroupFills} {currency} />
+    <TransactionLedger days={filteredDays} filter={$txFilter} groupFills={$txGroupFills} {currency} />
   {:else}
     <div class="panel-empty">
       Could not load transactions. Check that the backend is running on port 9001.
@@ -161,6 +182,12 @@
     gap: 12px;
     flex-wrap: wrap;
     margin-bottom: 14px;
+  }
+  .filters-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
   }
   .group-toggle {
     display: inline-flex;
