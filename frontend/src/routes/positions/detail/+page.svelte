@@ -224,6 +224,46 @@
       .finally(() => (marketDataLoading = false));
   });
 
+  // Index context chart, shown above the position's own -- same lookback so
+  // it covers the same history, fetched once the position (and so a real,
+  // open-date-based lookbackDays rather than the loading-state fallback)
+  // resolves.
+  let qqqBars = $state<OHLCVBar[]>([]);
+  let qqqFetchId = 0;
+  $effect(() => {
+    if (!position) return;
+    const lookback = lookbackDays;
+    const id = ++qqqFetchId;
+    api
+      .marketDataOhlcv("QQQ", lookback)
+      .then((r) => {
+        if (id === qqqFetchId && r.ok) qqqBars = r.bars;
+      })
+      .catch(() => {});
+  });
+
+  // QQQ's own change across the same focusRange the daily chart opens on --
+  // not a fixed 1Y/YTD tile, so it reads as "how did the index do while
+  // this trade was open" rather than an unrelated headline figure.
+  // Crosshair and pan state shared between the index chart and the daily
+  // chart below it -- whichever one the user is actually interacting with
+  // writes here, and both read it back (see SymbolChart's own
+  // onCrosshairMove/syncCrosshairTime and onVisibleRangeChange/
+  // syncVisibleRange docs for how the echo back to the originating chart
+  // is suppressed).
+  let syncedCrosshairTime = $state<string | null>(null);
+  let syncedVisibleRange = $state<{ from: string; to: string } | null>(null);
+
+  const qqqWindowChange = $derived.by(() => {
+    if (!focusRange || qqqBars.length < 2) return null;
+    const inWindow = qqqBars.filter((b) => b.time >= focusRange.from && b.time <= focusRange.to);
+    if (inWindow.length < 2) return null;
+    const first = inWindow[0].close;
+    const last = inWindow[inWindow.length - 1].close;
+    if (first === 0) return null;
+    return ((last - first) / first) * 100;
+  });
+
   /** Trading-day lookback, not calendar days -- 21/63/126/252 approximate a
    *  month/quarter/half-year/year of sessions. Close enough for a summary
    *  tile; not meant to match any vendor's own period math exactly. */
@@ -396,6 +436,37 @@
       </div>
 
       <div class="panel">
+        {#if marketData?.ok && qqqBars.length}
+          <div class="idx-toolbar">
+            <div class="idx-id">
+              <span class="idx-ticker">QQQ</span>
+              <span class="idx-name">Nasdaq 100</span>
+            </div>
+            <div class="idx-chg-wrap">
+              <div class="idx-chg {qqqWindowChange !== null ? toneOf(qqqWindowChange) : ''}">
+                {qqqWindowChange !== null
+                  ? `${qqqWindowChange >= 0 ? "+" : ""}${qqqWindowChange.toFixed(1)}%`
+                  : EM_DASH}
+              </div>
+              <div class="idx-sub">over this window</div>
+            </div>
+          </div>
+          <SymbolChart
+            history={qqqBars}
+            height={130}
+            regimeBands
+            apsPane={false}
+            extendedAlerts={false}
+            showTimeAxis={false}
+            {focusRange}
+            onCrosshairMove={(t) => (syncedCrosshairTime = t)}
+            syncCrosshairTime={syncedCrosshairTime}
+            onVisibleRangeChange={(r) => (syncedVisibleRange = r)}
+            syncVisibleRange={syncedVisibleRange}
+          />
+          <div class="divider"></div>
+        {/if}
+
         <div class="chart-toolbar">
           <div>
             <span class="chart-title">1D</span>
@@ -416,17 +487,17 @@
         {#if marketDataLoading}
           <SkeletonCard height={280} rows={0} />
         {:else if marketData?.ok}
-          <SymbolChart history={marketData.bars} height={280} {tradeMarkers} {focusRange} {selectedMarker} />
-          <div class="ret-tiles">
-            {#each periodReturns as { key, value } (key)}
-              <div class="ret-tile" class:active={key === headlineReturn.key}>
-                <div class="ret-key">{key}</div>
-                <div class="ret-val {value !== null ? toneOf(value) : ''}">
-                  {value !== null ? `${value >= 0 ? "+" : ""}${value.toFixed(1)}%` : EM_DASH}
-                </div>
-              </div>
-            {/each}
-          </div>
+          <SymbolChart
+            history={marketData.bars}
+            height={280}
+            {tradeMarkers}
+            {focusRange}
+            {selectedMarker}
+            onCrosshairMove={(t) => (syncedCrosshairTime = t)}
+            syncCrosshairTime={syncedCrosshairTime}
+            onVisibleRangeChange={(r) => (syncedVisibleRange = r)}
+            syncVisibleRange={syncedVisibleRange}
+          />
         {:else}
           <div class="chart-empty">
             <div class="chart-empty-title">No price chart available for {position.symbol}</div>
@@ -643,6 +714,53 @@
     font-weight: var(--weight-medium);
   }
 
+  .idx-toolbar {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 12px 18px 6px;
+  }
+  .idx-id {
+    display: flex;
+    align-items: baseline;
+    gap: 7px;
+  }
+  .idx-ticker {
+    font-size: var(--text-md);
+    font-weight: var(--weight-bold);
+  }
+  .idx-name {
+    font-size: var(--text-xs);
+    color: var(--dim-55);
+  }
+  .idx-chg-wrap {
+    text-align: right;
+  }
+  .idx-chg {
+    font-size: var(--text-sm);
+    font-weight: var(--weight-bold);
+    font-variant-numeric: tabular-nums;
+  }
+  .idx-chg.pos {
+    color: var(--up);
+  }
+  .idx-chg.neg {
+    color: var(--dn);
+  }
+  .idx-chg.flat {
+    color: var(--text);
+  }
+  .idx-sub {
+    font-size: var(--text-2xs);
+    color: var(--dim-45);
+  }
+  .divider {
+    height: 1px;
+    margin: 0 18px;
+    background: var(--border-05);
+  }
+
   .chart-toolbar {
     display: flex;
     align-items: flex-start;
@@ -681,49 +799,6 @@
   .chart-headline-sub {
     font-size: var(--text-2xs);
     color: var(--dim-45);
-  }
-
-  .ret-tiles {
-    display: grid;
-    grid-template-columns: repeat(7, 1fr);
-    gap: 8px;
-    padding: 14px 18px 18px;
-  }
-  .ret-tile {
-    padding: 8px 10px;
-    border-radius: var(--radius-md);
-    background: var(--surface-02);
-    border: 1px solid var(--border-05);
-  }
-  .ret-tile.active {
-    background: var(--up-bg);
-    border-color: var(--up);
-  }
-  .ret-key {
-    font-size: var(--text-2xs);
-    color: var(--dim-55);
-    letter-spacing: 0.1em;
-    font-weight: var(--weight-semibold);
-  }
-  .ret-val {
-    font-size: var(--text-md);
-    font-weight: var(--weight-bold);
-    font-variant-numeric: tabular-nums;
-    margin-top: 2px;
-  }
-  .ret-val.pos {
-    color: var(--up);
-  }
-  .ret-val.neg {
-    color: var(--dn);
-  }
-  .ret-val.flat {
-    color: var(--text);
-  }
-  @media (max-width: 640px) {
-    .ret-tiles {
-      grid-template-columns: repeat(4, 1fr);
-    }
   }
 
   .chart-empty {

@@ -119,6 +119,11 @@ export const posFilter = persisted<PosFilter>("ibkr.pos.filter", "all");
 /** Symbols to show on the Positions page, same idea as txSymbols. */
 export const posSymbols = persisted<string[]>("ibkr.pos.symbols", []);
 
+/** Months to show on the Positions page, as "YYYY-MM" keys against whichever
+ *  date posGroupBy currently keys off (exit or entry) -- same convention as
+ *  txMonths. Empty means every month. */
+export const posMonths = persisted<string[]>("ibkr.pos.months", []);
+
 /** Show only carry-in positions -- orthogonal to posFilter, since a
  *  carry-in can be either open or closed. Off by default. */
 export const posCarryInOnly = persisted<boolean>("ibkr.pos.carryInOnly", false);

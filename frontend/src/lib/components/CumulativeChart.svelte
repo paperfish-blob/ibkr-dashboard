@@ -16,8 +16,15 @@
     series: CumulativePoint[];
     currency?: string;
     height?: number;
+    /** Overrides the panel's caption line under the title. */
+    caption?: string;
   }
-  let { series, currency = "USD", height = 280 }: Props = $props();
+  let {
+    series,
+    currency = "USD",
+    height = 280,
+    caption = "Gross, before commission · Flex trades only, one point per day with activity · today added from Gateway when connected, else today's Flex trades",
+  }: Props = $props();
 
   function cssVar(name: string): string {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -157,10 +164,7 @@
     <div class="hd-left">
       <div class="eyebrow">Running total</div>
       <div class="title">Cumulative realized P&amp;L</div>
-      <div class="caption">
-        Gross, before commission · Flex trades only, one point per day with activity · today added
-        from Gateway when connected, else today's Flex trades
-      </div>
+      <div class="caption">{caption}</div>
     </div>
   </div>
 

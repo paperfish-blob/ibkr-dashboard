@@ -6,11 +6,13 @@
   import PageHeader from "$lib/components/PageHeader.svelte";
   import SegToggle from "$lib/components/SegToggle.svelte";
   import SymbolFilter from "$lib/components/SymbolFilter.svelte";
+  import MonthFilter from "$lib/components/MonthFilter.svelte";
   import PositionsTable from "$lib/components/PositionsTable.svelte";
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
   import AlertBar from "$lib/components/AlertBar.svelte";
   import PeriodPicker from "$lib/components/PeriodPicker.svelte";
   import { fmtMoney, num, toneOf } from "$lib/format";
+  import type { Position } from "$lib/api";
   import {
     positions,
     positionsLoading,
@@ -20,6 +22,7 @@
     setPeriod,
     posFilter,
     posSymbols,
+    posMonths,
     posCarryInOnly,
     posGroupBy,
     type PosFilter,
@@ -45,11 +48,24 @@
     const symbols = qs.get("symbols");
     if (symbols) posSymbols.set(symbols.split(",").filter(Boolean));
 
+    const months = qs.get("months");
+    if (months) posMonths.set(months.split(",").filter(Boolean));
+
     if (qs.get("carryIn") === "1") posCarryInOnly.set(true);
 
     const groupBy = qs.get("groupBy");
     if (groupBy === "exit" || groupBy === "entry") posGroupBy.set(groupBy);
   }
+
+  // A month outside the active year can never match a position -- same fix
+  // as the Transactions page's own txMonths/period reconciliation. Runs
+  // once more after its own posMonths.set() with kept.length unchanged, so
+  // it settles rather than looping.
+  $effect(() => {
+    if ($period === "all") return;
+    const kept = $posMonths.filter((m) => m.startsWith(`${$period}-`));
+    if (kept.length !== $posMonths.length) posMonths.set(kept);
+  });
 
   // Keep the URL in sync with the filters, one-way (store -> URL). Only
   // reads the filter stores, never page.url, so it can't feed back into
@@ -59,6 +75,7 @@
     if ($period !== "all") parts.push(`year=${$period}`);
     if ($posFilter !== "all") parts.push(`filter=${$posFilter}`);
     if ($posSymbols.length > 0) parts.push(`symbols=${$posSymbols.join(",")}`);
+    if ($posMonths.length > 0) parts.push(`months=${$posMonths.join(",")}`);
     if ($posCarryInOnly) parts.push("carryIn=1");
     if ($posGroupBy !== "exit") parts.push(`groupBy=${$posGroupBy}`);
 
@@ -94,6 +111,23 @@
 
   const carryInCount = $derived(($positions?.positions ?? []).filter((p) => p.is_carry_in).length);
 
+  // Keyed off whichever date posGroupBy currently keys the table's day bands
+  // off -- a position without that date (a still-open position under "exit",
+  // a carry-in under "entry") has no month to count toward.
+  function groupDate(p: Position): string | null {
+    return $posGroupBy === "exit" ? p.exit_date : p.open_date;
+  }
+  const monthCounts = $derived.by(() => {
+    const m = new Map<string, number>();
+    for (const p of $positions?.positions ?? []) {
+      const d = groupDate(p);
+      if (!d) continue;
+      const key = d.slice(0, 7);
+      m.set(key, (m.get(key) ?? 0) + 1);
+    }
+    return m;
+  });
+
   const filtered = $derived.by(() => {
     const all = $positions?.positions ?? [];
     const byStatus = all.filter((p) => {
@@ -104,7 +138,13 @@
     const bySymbol = $posSymbols.length
       ? byStatus.filter((p) => $posSymbols.includes(p.symbol))
       : byStatus;
-    return $posCarryInOnly ? bySymbol.filter((p) => p.is_carry_in) : bySymbol;
+    const byMonth = $posMonths.length
+      ? bySymbol.filter((p) => {
+          const d = groupDate(p);
+          return d !== null && $posMonths.includes(d.slice(0, 7));
+        })
+      : bySymbol;
+    return $posCarryInOnly ? byMonth.filter((p) => p.is_carry_in) : byMonth;
   });
 
   const total = $derived(
@@ -154,11 +194,18 @@
 
   {#if $positions}
     <div class="toolbar">
-      <SymbolFilter
-        counts={symbolCounts}
-        active={$posSymbols}
-        onChange={(next) => posSymbols.set(next)}
-      />
+      <div class="toolbar-left">
+        <SymbolFilter
+          counts={symbolCounts}
+          active={$posSymbols}
+          onChange={(next) => posSymbols.set(next)}
+        />
+        <MonthFilter
+          counts={monthCounts}
+          active={$posMonths}
+          onChange={(next) => posMonths.set(next)}
+        />
+      </div>
       <div class="toolbar-right">
         {#if carryInCount > 0}
           <button
@@ -221,6 +268,12 @@
     gap: 12px;
     flex-wrap: wrap;
     margin-bottom: 14px;
+  }
+  .toolbar-left {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-wrap: wrap;
   }
   .toolbar-right {
     display: flex;

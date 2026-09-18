@@ -10,24 +10,53 @@
    * client side, the way the position detail page's period tiles bucket by
    * trading-day offset.
    */
-  import { fmtMoney, num, toneOf } from "$lib/format";
+  import { fmtMoney, num, toneOf, EM_DASH } from "$lib/format";
   import type { CumulativePoint } from "$lib/api";
 
   interface Props {
     series: CumulativePoint[];
     currency?: string;
+    /** Singular noun for what series[].trade_count actually counts --
+     *  "trade" (default, Overview's daily P&L series) or "position" (the
+     *  Positions Overview page's closed round-trips). Pluralized with a
+     *  trailing "s". */
+    unit?: string;
+    /** Overrides the panel's caption line under the title. */
+    caption?: string;
+    /** Builds the URL a clicked month opens (new tab) -- defaults to the
+     *  Transactions ledger, filtered to that month's opening trades.
+     *  Positions Overview passes one pointing at the Positions page instead,
+     *  since its months are round-trips, not executions. */
+    monthLink?: (monthKey: string) => string;
+    /** "YYYY-MM" -> { wins, total } among that month's closed positions --
+     *  when given, adds a third "win rate" chart row and a win-rate line on
+     *  each tile. Positions Overview only; omitted (the default) on the
+     *  plain Overview page, where a single trade isn't naturally a
+     *  win/loss the same way a closed round-trip is. */
+    winRates?: Map<string, { wins: number; total: number }>;
     /** Fired with the hovered month's "YYYY-MM" key (or null on clear) --
      *  lets a sibling chart elsewhere on the page (e.g. an index benchmark)
      *  sync its own highlight to the same month. */
     onHoverMonth?: (monthKey: string | null) => void;
   }
-  let { series, currency = "USD", onHoverMonth }: Props = $props();
+  let {
+    series,
+    currency = "USD",
+    unit = "trade",
+    caption = "Gross, before commission · Flex trades only, bucketed from the daily series above",
+    monthLink = (key) => `/transactions?year=${key.slice(0, 4)}&filter=opening&months=${key}&group=1`,
+    winRates,
+    onHoverMonth,
+  }: Props = $props();
+  const unitPlural = $derived(`${unit}s`);
+  const unitCountLabel = $derived(`${unit[0].toUpperCase()}${unit.slice(1)} count`);
 
   interface MonthBucket {
     key: string; // "2026-06", sorts chronologically as a string
     label: string; // "Jun 2026"
     total: number;
     trades: number;
+    winRate: number | null; // 0-100, null when winRates has nothing for this month
   }
 
   const months = $derived.by((): MonthBucket[] => {
@@ -38,7 +67,8 @@
       if (!b) {
         const [y, m] = key.split("-").map(Number);
         const label = new Date(y, m - 1, 1).toLocaleDateString("en-US", { month: "short", year: "numeric" });
-        b = { key, label, total: 0, trades: 0 };
+        const w = winRates?.get(key);
+        b = { key, label, total: 0, trades: 0, winRate: w && w.total > 0 ? (w.wins / w.total) * 100 : null };
         buckets.set(key, b);
       }
       b.total += num(p.realized_pnl);
@@ -49,6 +79,20 @@
 
   const grandTotal = $derived(months.reduce((sum, m) => sum + m.total, 0));
   const totalTrades = $derived(months.reduce((sum, m) => sum + m.trades, 0));
+
+  // Weighted across every closed position, not an average of the per-month
+  // percentages -- a 100%-of-1 month and a 40%-of-50 month shouldn't count
+  // the same.
+  const overallWinRate = $derived.by(() => {
+    if (!winRates || winRates.size === 0) return null;
+    let wins = 0;
+    let total = 0;
+    for (const v of winRates.values()) {
+      wins += v.wins;
+      total += v.total;
+    }
+    return total > 0 ? (wins / total) * 100 : null;
+  });
 
   // ---- shared bar geometry -- both charts use the same x/width per month
   // so their columns line up exactly. ----
@@ -158,6 +202,46 @@
     return { bars: out, baseY };
   });
 
+  // ---- win-rate bars (always 0-100%, a fixed scale rather than one that
+  // floats with the data -- a 60% month should always read the same height
+  // whichever months happen to be in view) ----
+  const WIN_H = 130;
+  const WIN_PAD_TOP = 22;
+  const WIN_PAD_BOTTOM = 22;
+  // The reference line and the green/red split both sit at this rate, not
+  // 50% -- a lower bar with a solid overall edge (big winners, frequent
+  // small losers) is still "winning" by this book, not just literally
+  // batting above half.
+  const WIN_RATE_THRESHOLD = 30;
+
+  interface WinBar extends MonthBucket {
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    up: boolean;
+    path: string;
+  }
+
+  const winBars = $derived.by((): { bars: WinBar[]; refY: number } | null => {
+    if (!months.length || !barLayout || !winRates) return null;
+    const { barW, xs } = barLayout;
+    const plotH = WIN_H - WIN_PAD_TOP - WIN_PAD_BOTTOM;
+    const baseY = WIN_H - WIN_PAD_BOTTOM;
+    const refY = WIN_PAD_TOP + plotH * (1 - WIN_RATE_THRESHOLD / 100);
+
+    const out: WinBar[] = months.map((m, i) => {
+      const x = xs[i];
+      const rate = m.winRate ?? 0;
+      const up = rate >= WIN_RATE_THRESHOLD;
+      const h = (rate / 100) * plotH;
+      const y = baseY - h;
+      const r = Math.min(4, barW / 2, h);
+      return { ...m, x, y, w: barW, h, up, path: barPath(x, y, barW, h, true, r) };
+    });
+    return { bars: out, refY };
+  });
+
   // Hovering a month bar in either chart highlights that month in BOTH
   // (dims the rest) and shows both tooltips -- comparing P&L to trade count
   // for one month then needs a single hover, not two. Keyed by index into
@@ -166,8 +250,10 @@
   let hoveredIndex = $state<number | null>(null);
   let pnlBox: HTMLDivElement | undefined = $state();
   let tradesBox: HTMLDivElement | undefined = $state();
+  let winBox: HTMLDivElement | undefined = $state();
   let pnlBarEls: (SVGPathElement | undefined)[] = [];
   let tradesBarEls: (SVGPathElement | undefined)[] = [];
+  let winBarEls: (SVGPathElement | undefined)[] = [];
 
   function barOpacity(i: number): number {
     return hoveredIndex === null || hoveredIndex === i ? 1 : 0.32;
@@ -178,13 +264,11 @@
     onHoverMonth?.(i === null ? null : months[i].key);
   }
 
-  // Clicking a month drills into its own trades on the Transactions page --
-  // opening trades, grouped, since that's what explains where a month's
-  // realized P&L actually came from. New tab so the Overview page (and its
-  // current hover state) stays put behind it.
+  // Clicking a month drills into it on whichever page monthLink points at --
+  // Transactions by default, or wherever the caller passed instead. New tab
+  // so this page (and its current hover state) stays put behind it.
   function openMonth(key: string) {
-    const year = key.slice(0, 4);
-    window.open(`/transactions?year=${year}&filter=opening&months=${key}&group=1`, "_blank");
+    window.open(monthLink(key), "_blank");
   }
 
   function tooltipPos(box: HTMLDivElement | undefined, bar: SVGPathElement | undefined) {
@@ -196,18 +280,23 @@
 
   const pnlTooltip = $derived(hoveredIndex === null ? null : tooltipPos(pnlBox, pnlBarEls[hoveredIndex]));
   const tradesTooltip = $derived(hoveredIndex === null ? null : tooltipPos(tradesBox, tradesBarEls[hoveredIndex]));
+  const winTooltip = $derived(hoveredIndex === null ? null : tooltipPos(winBox, winBarEls[hoveredIndex]));
 </script>
 
 <div class="panel">
   <div class="hd">
     <div class="hd-left">
       <div class="eyebrow">By month</div>
-      <div class="title">Monthly P&amp;L &amp; trade count</div>
-      <div class="caption">Gross, before commission · Flex trades only, bucketed from the daily series above</div>
+      <div class="title">Monthly P&amp;L &amp; {unit} count</div>
+      <div class="caption">{caption}</div>
     </div>
     <div class="hd-right">
       <div class="val {toneOf(grandTotal)}">{fmtMoney(grandTotal, currency)}</div>
-      <div class="sub">{totalTrades} trade{totalTrades === 1 ? "" : "s"}</div>
+      <div class="sub">
+        {totalTrades} {totalTrades === 1 ? unit : unitPlural}{overallWinRate !== null
+          ? ` · ${overallWinRate.toFixed(0)}% win rate`
+          : ""}
+      </div>
     </div>
   </div>
 
@@ -256,7 +345,7 @@
             <div class="t-month">{months[hoveredIndex].label}</div>
             <div class="t-val {toneOf(months[hoveredIndex].total)}">{fmtMoney(months[hoveredIndex].total, currency)}</div>
             <div class="t-sub">
-              {months[hoveredIndex].trades} trade{months[hoveredIndex].trades === 1 ? "" : "s"}
+              {months[hoveredIndex].trades} {months[hoveredIndex].trades === 1 ? unit : unitPlural}
             </div>
           </div>
         {/if}
@@ -266,7 +355,7 @@
     <div class="divider"></div>
 
     <div class="body">
-      <div class="sub-title">Trade count</div>
+      <div class="sub-title">{unitCountLabel}</div>
       <div class="bars-box" bind:this={tradesBox} onmouseleave={() => setHoveredIndex(null)}>
         <svg class="bars-svg" viewBox="0 0 {CHART_W} {TRADES_H}" preserveAspectRatio="xMidYMid meet">
           {#each months as m, i (m.key)}
@@ -306,12 +395,75 @@
           <div class="tooltip show" style="left:{tradesTooltip.x}px; top:{tradesTooltip.y}px">
             <div class="t-month">{months[hoveredIndex].label}</div>
             <div class="t-val neutral">
-              {months[hoveredIndex].trades} trade{months[hoveredIndex].trades === 1 ? "" : "s"}
+              {months[hoveredIndex].trades} {months[hoveredIndex].trades === 1 ? unit : unitPlural}
             </div>
           </div>
         {/if}
       </div>
     </div>
+
+    {#if winBars}
+      <div class="divider"></div>
+
+      <div class="body">
+        <div class="sub-title">
+          Win rate <span class="agg">— share of that month's {unitPlural} closed profitably</span>
+        </div>
+        <div class="bars-box" bind:this={winBox} onmouseleave={() => setHoveredIndex(null)}>
+          <svg class="bars-svg" viewBox="0 0 {CHART_W} {WIN_H}" preserveAspectRatio="xMidYMid meet">
+            {#each months as m, i (m.key)}
+              <rect
+                class="hover-band"
+                class:active={hoveredIndex === i}
+                x={barLayout.xs[i] - BAR_GAP / 2}
+                y={0}
+                width={barLayout.barW + BAR_GAP}
+                height={WIN_H}
+                onmousemove={() => setHoveredIndex(i)}
+                onclick={() => openMonth(m.key)}
+              ><title>Open {m.label} in Transactions</title></rect>
+            {/each}
+            <line class="ref-line" x1={PAD_L} y1={winBars.refY} x2={CHART_W - PAD_R} y2={winBars.refY} />
+            {#each winBars.bars as bar, i (bar.key)}
+              <path
+                class="bar-rect"
+                d={bar.path}
+                fill={bar.winRate === null ? "var(--dim-35)" : bar.up ? "var(--up)" : "var(--dn)"}
+                style="opacity:{barOpacity(i)}"
+                bind:this={winBarEls[i]}
+              />
+              {#if barLayout.showValueLabels}
+                <text
+                  class="bar-label"
+                  x={bar.x + bar.w / 2}
+                  y={bar.y - 6}
+                  text-anchor="middle"
+                  fill={bar.winRate === null ? "var(--dim-45)" : bar.up ? "var(--up)" : "var(--dn)"}
+                >
+                  {bar.winRate === null ? EM_DASH : `${bar.winRate.toFixed(0)}%`}
+                </text>
+              {/if}
+              {#if i % barLayout.monthLabelEvery === 0}
+                <text class="bar-month" x={bar.x + bar.w / 2} y={WIN_H - 6} text-anchor="middle">
+                  {bar.label.split(" ")[0]}
+                </text>
+              {/if}
+            {/each}
+            <text class="ref-label" x={CHART_W - PAD_R} y={winBars.refY - 4} text-anchor="end">
+              {WIN_RATE_THRESHOLD}% line
+            </text>
+          </svg>
+          {#if hoveredIndex !== null && winTooltip}
+            <div class="tooltip show" style="left:{winTooltip.x}px; top:{winTooltip.y}px">
+              <div class="t-month">{months[hoveredIndex].label}</div>
+              <div class="t-val {months[hoveredIndex].winRate === null ? '' : months[hoveredIndex].winRate! >= WIN_RATE_THRESHOLD ? 'pos' : 'neg'}">
+                {months[hoveredIndex].winRate === null ? EM_DASH : `${months[hoveredIndex].winRate!.toFixed(0)}%`}
+              </div>
+            </div>
+          {/if}
+        </div>
+      </div>
+    {/if}
 
     <div class="divider"></div>
 
@@ -321,7 +473,12 @@
           <button class="tile" onclick={() => openMonth(m.key)} title="Open {m.label} in Transactions">
             <div class="tile-month">{m.label}</div>
             <div class="tile-val {toneOf(m.total)}">{fmtMoney(m.total, currency)}</div>
-            <div class="tile-trades">{m.trades} trade{m.trades === 1 ? "" : "s"}</div>
+            <div class="tile-trades">{m.trades} {m.trades === 1 ? unit : unitPlural}</div>
+            {#if m.winRate !== null}
+              <div class="tile-win {m.winRate >= WIN_RATE_THRESHOLD ? 'hi' : 'lo'}">
+                <span class="dot"></span>{m.winRate.toFixed(0)}% win rate
+              </div>
+            {/if}
           </button>
         {/each}
       </div>
@@ -399,6 +556,13 @@
     color: var(--dim-55);
     margin-bottom: 4px;
   }
+  .sub-title .agg {
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-medium);
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--dim-45);
+  }
   .divider {
     height: 1px;
     margin: 0 22px;
@@ -448,6 +612,16 @@
   .base-line {
     stroke: var(--border-05);
     stroke-width: 1;
+  }
+  .ref-line {
+    stroke: var(--border-12);
+    stroke-width: 1;
+    stroke-dasharray: 3 3;
+  }
+  .ref-label {
+    font-size: 9px;
+    font-weight: var(--weight-medium);
+    fill: var(--dim-45);
   }
 
   .tooltip {
@@ -531,6 +705,33 @@
     font-weight: var(--weight-semibold);
     margin-top: 3px;
     font-variant-numeric: tabular-nums;
+  }
+  .tile-win {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-semibold);
+    margin-top: 2px;
+    font-variant-numeric: tabular-nums;
+  }
+  .tile-win .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    flex: none;
+  }
+  .tile-win.hi {
+    color: var(--up);
+  }
+  .tile-win.hi .dot {
+    background: var(--up);
+  }
+  .tile-win.lo {
+    color: var(--dn);
+  }
+  .tile-win.lo .dot {
+    background: var(--dn);
   }
 
   .empty {

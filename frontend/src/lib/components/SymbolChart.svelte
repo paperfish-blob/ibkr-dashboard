@@ -3,16 +3,21 @@
    * Daily candlestick chart with the same indicator set as ui-reference's
    * TickerChart: EMA9/EMA20/MA50/MA200 lines, an Absolute Price Strength
    * band, and climax/parabolic markers. Trimmed from the original -- no
-   * TradingView iframe fallback (this app never had one) and no cross-chart
-   * crosshair sync (this page only ever shows one chart at a time).
+   * TradingView iframe fallback (this app never had one). Cross-chart
+   * crosshair/pan sync (onCrosshairMove/syncCrosshairTime,
+   * onVisibleRangeChange/syncVisibleRange below) was added for the position
+   * detail page, which stacks an index chart above the position's own.
    */
   import { onDestroy } from "svelte";
   import {
     createChart,
+    isBusinessDay,
     LineStyle,
     type IChartApi,
     type IPriceLine,
     type ISeriesApi,
+    type MouseEventParams,
+    type Range,
     type SeriesMarker,
     type Time,
     CrosshairMode,
@@ -57,6 +62,28 @@
     apsPane?: boolean;
     /** Climax ("C") and parabolic tier markers above the bars. */
     extendedAlerts?: boolean;
+    /** Hide the bottom date axis -- for a chart stacked directly above
+     *  another that shares its exact range (e.g. the position detail
+     *  page's index chart above its daily chart), so the dates aren't
+     *  printed twice. */
+    showTimeAxis?: boolean;
+    /** Fired with the hovered bar's "YYYY-MM-DD" date (or null once the
+     *  cursor leaves the chart) -- lets a sibling chart mirror the same
+     *  crosshair position. */
+    onCrosshairMove?: (date: string | null) => void;
+    /** Drives this chart's crosshair from a sibling's own onCrosshairMove.
+     *  Ignored while the date matches what this chart itself just reported,
+     *  so the chart the user is actually hovering never fights its own
+     *  cursor; a date with no bar here (the two symbols' trading calendars
+     *  don't quite line up) just clears rather than guessing. */
+    syncCrosshairTime?: string | null;
+    /** Fired whenever this chart's visible window changes (pan, zoom, or
+     *  the initial default view), as {from, to} "YYYY-MM-DD" -- lets a
+     *  sibling chart mirror the same horizontal range. */
+    onVisibleRangeChange?: (range: { from: string; to: string } | null) => void;
+    /** Drives this chart's visible range from a sibling's own
+     *  onVisibleRangeChange, the same echo-suppression as syncCrosshairTime. */
+    syncVisibleRange?: { from: string; to: string } | null;
   }
   let {
     history,
@@ -69,7 +96,24 @@
     regimeBands = false,
     apsPane = true,
     extendedAlerts = true,
+    showTimeAxis = true,
+    onCrosshairMove,
+    syncCrosshairTime = null,
+    onVisibleRangeChange,
+    syncVisibleRange = null,
   }: Props = $props();
+
+  // Time values read back from the chart (crosshair moves, visible-range
+  // changes) come as whatever representation the library normalized the
+  // fed-in date strings to -- typically BusinessDay objects, not the
+  // original strings -- so every read path goes through this to get back
+  // to a plain "YYYY-MM-DD" comparable with history[].time and with what
+  // a sibling chart reports.
+  function timeToIso(t: Time): string {
+    if (typeof t === "string") return t;
+    if (isBusinessDay(t)) return `${t.year}-${String(t.month).padStart(2, "0")}-${String(t.day).padStart(2, "0")}`;
+    return new Date(t * 1000).toISOString().slice(0, 10);
+  }
 
   const showAlerts = $derived(extendedAlerts);
 
@@ -94,6 +138,18 @@
   let applyDefaultViewRef: (() => void) | null = null;
   let interactAbort: AbortController | null = null;
   let viewMoved = $state(false);
+
+  // What THIS chart itself last reported via onCrosshairMove/
+  // onVisibleRangeChange -- lets the sync-application effects below tell
+  // "a sibling chart echoing my own last move" apart from "a sibling
+  // reporting a genuinely new one", so applying an incoming sync value
+  // never fights the chart the user is actually interacting with, and a
+  // round trip through the parent settles instead of bouncing.
+  let ownCrosshairTime: string | null = null;
+  let ownRangeKey: string | null = null;
+  function rangeKey(r: { from: string; to: string }): string {
+    return `${r.from}-${r.to}`;
+  }
 
   // Only the hovered month's own candles get recolored, to a deepened
   // version of whichever hue they'd already be -- every other candle gets
@@ -161,6 +217,7 @@
       timeScale: {
         borderColor: "rgba(12,13,16,0.1)",
         timeVisible: true,
+        visible: showTimeAxis,
       },
     });
 
@@ -339,6 +396,23 @@
       if (interacted && !programmatic) viewMoved = true;
     });
 
+    chart.subscribeCrosshairMove((param: MouseEventParams<Time>) => {
+      const t = param.time !== undefined ? timeToIso(param.time) : null;
+      ownCrosshairTime = t;
+      onCrosshairMove?.(t);
+    });
+
+    chart.timeScale().subscribeVisibleTimeRangeChange((range: Range<Time> | null) => {
+      if (!range) {
+        ownRangeKey = null;
+        onVisibleRangeChange?.(null);
+        return;
+      }
+      const r = { from: timeToIso(range.from), to: timeToIso(range.to) };
+      ownRangeKey = rangeKey(r);
+      onVisibleRangeChange?.(r);
+    });
+
     resizeObs = new ResizeObserver(() => {
       if (container && chart) {
         chart.applyOptions({ width: container.clientWidth });
@@ -385,12 +459,55 @@
     candles?.setData(candleData(history, month));
     // Zoom into the highlighted month's own window rather than leaving the
     // chart at its wider default view, where one month can be a sliver a
-    // few px wide -- then put the view back once the hover clears.
-    if (month) {
-      zoomToMonth(month);
+    // few px wide -- then put the view back once the hover clears. A month
+    // older than this symbol's own fetched history (an account can cover
+    // more years than the index chart's own lookback) has no bars to zoom
+    // to at all; zooming there anyway would show an empty pane with a
+    // stale/bogus price scale, so it falls back to the default view -- the
+    // spotlight dim above still applies (everything gets dimmed, since
+    // nothing matches), just without a broken zoom.
+    const hasBarsForMonth = month ? history.some((b) => b.time.startsWith(month)) : false;
+    if (hasBarsForMonth) {
+      zoomToMonth(month!);
     } else {
       applyDefaultViewRef?.();
     }
+  });
+
+  // Mirror a sibling chart's crosshair -- skipped while it matches what
+  // this chart itself just reported (the user is hovering this one
+  // directly; its own real crosshair wins), and cleared rather than
+  // guessed when this chart has no bar on that date at all.
+  $effect(() => {
+    chartVersion;
+    const t = syncCrosshairTime;
+    if (!chart || !candles) return;
+    if (t === ownCrosshairTime) return;
+    if (t === null) {
+      chart.clearCrosshairPosition();
+      return;
+    }
+    const bar = history.find((b) => b.time === t);
+    if (bar) {
+      chart.setCrosshairPosition(bar.close, t as unknown as Time, candles);
+    } else {
+      chart.clearCrosshairPosition();
+    }
+  });
+
+  // Mirror a sibling chart's visible window -- same echo-suppression via
+  // ownRangeKey as the crosshair sync above.
+  $effect(() => {
+    chartVersion;
+    const range = syncVisibleRange;
+    if (!chart || !range) return;
+    const key = rangeKey(range);
+    if (key === ownRangeKey) return;
+    ownRangeKey = key;
+    chart.timeScale().setVisibleRange({
+      from: Math.floor(new Date(range.from).getTime() / 1000) as unknown as Time,
+      to: Math.floor(new Date(range.to).getTime() / 1000) as unknown as Time,
+    });
   });
 
   onDestroy(() => {

@@ -22,14 +22,33 @@
   // 1Y (252 trading days ~= 365 calendar days) plus MA200's own warm-up
   // buffer (400 calendar days, same reasoning as the position detail page's
   // MA200_WARMUP_DAYS) -- the index chart's own 1Y tile needs a full year of
-  // real bars behind it, not just enough for the moving averages.
-  const IDX_LOOKBACK_DAYS = 765;
+  // real bars behind it, not just enough for the moving averages. This is
+  // also the floor for MonthlyPnL's month-hover zoom: hovering a month
+  // older than what's actually been fetched has no bars to zoom to (see
+  // SymbolChart's own fallback for when that still happens), so once $pnl
+  // reveals the account goes back further than this, the window grows to
+  // cover it -- the common case (recent-only data, or one year selected)
+  // still costs a single fetch.
+  const IDX_LOOKBACK_MIN_DAYS = 765;
   let qqqBars = $state<OHLCVBar[]>([]);
-  onMount(() => {
+  let qqqLookbackDays = $state(IDX_LOOKBACK_MIN_DAYS);
+
+  $effect(() => {
+    const earliest = $pnl?.series[0]?.date;
+    if (!earliest) return;
+    const daysSince = Math.ceil((Date.now() - new Date(earliest).getTime()) / 86_400_000);
+    const needed = daysSince + 400;
+    if (needed > qqqLookbackDays) qqqLookbackDays = needed;
+  });
+
+  let qqqFetchId = 0;
+  $effect(() => {
+    const lookback = qqqLookbackDays;
+    const id = ++qqqFetchId;
     api
-      .marketDataOhlcv("QQQ", IDX_LOOKBACK_DAYS)
+      .marketDataOhlcv("QQQ", lookback)
       .then((r) => {
-        if (r.ok) qqqBars = r.bars;
+        if (id === qqqFetchId && r.ok) qqqBars = r.bars;
       })
       .catch(() => {});
   });
