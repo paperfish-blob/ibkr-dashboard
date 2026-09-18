@@ -404,7 +404,7 @@
     overflow: visible;
   }
   .bar-label {
-    font-size: 6px;
+    font-size: 10px;
     font-weight: var(--weight-semibold);
     font-variant-numeric: tabular-nums;
     fill: var(--text);
@@ -414,7 +414,7 @@
     font-weight: var(--weight-medium);
   }
   .bar-month {
-    font-size: 6px;
+    font-size: 10px;
     font-weight: var(--weight-medium);
     fill: var(--dim-45);
   }
