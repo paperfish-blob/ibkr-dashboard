@@ -48,6 +48,9 @@
     /** A single fill to call out with a horizontal price line, e.g. the
      *  transaction row the user just clicked. */
     selectedMarker?: { price: number; label: string; color: string } | null;
+    /** "YYYY-MM" -- dims every bar outside this calendar month, e.g. synced
+     *  from a hovered month in a P&L chart elsewhere on the page. */
+    highlightMonth?: string | null;
     /** Paint the per-bar trend-regime background behind the candles. */
     regimeBands?: boolean;
     /** Absolute Price Strength columns along the bottom of the pane. */
@@ -62,6 +65,7 @@
     tradeMarkers,
     focusRange,
     selectedMarker,
+    highlightMonth,
     regimeBands = false,
     apsPane = true,
     extendedAlerts = true,
@@ -72,6 +76,7 @@
   let container: HTMLDivElement | undefined = $state();
   let chart: IChartApi | null = null;
   let candles: ISeriesApi<"Candlestick"> | null = null;
+  let spotlight: ISeriesApi<"Histogram"> | null = null;
   // Bumped once the chart (re)builds, so the price-line effect below re-runs
   // and re-attaches after a rebuild, not just when selectedMarker changes.
   // Written from a plain counter, never read-then-incremented in place --
@@ -241,6 +246,20 @@
       candles.setMarkers(markers);
     }
 
+    // Month-hover spotlight -- added last so it draws on top of the candles,
+    // MAs and markers: a translucent white scrim over every bar outside
+    // highlightMonth, which stays untouched. A tint drawn behind the candles
+    // (tried first, on the regime scale) barely showed against the regime
+    // colors already back there; dimming everything else reads unambiguously
+    // regardless of what's underneath. Transparent (a no-op) when unset.
+    spotlight = chart.addHistogramSeries({
+      priceScaleId: "regime",
+      priceLineVisible: false,
+      lastValueVisible: false,
+    });
+    chart.priceScale("regime").applyOptions({ scaleMargins: { top: 0, bottom: 0 } });
+    spotlight.setData(bars.map((b) => ({ time: b.time as unknown as Time, value: 1, color: "rgba(0,0,0,0)" })));
+
     const applyDefaultView = () => {
       if (!chart) return;
       if (focusRange) {
@@ -318,6 +337,19 @@
         title: marker.label,
       });
     }
+  });
+
+  $effect(() => {
+    chartVersion;
+    const month = highlightMonth;
+    if (!spotlight || !history?.length) return;
+    spotlight.setData(
+      history.map((b) => ({
+        time: b.time as unknown as Time,
+        value: 1,
+        color: !month || b.time.startsWith(month) ? "rgba(0,0,0,0)" : "rgba(255,255,255,0.68)",
+      })),
+    );
   });
 
   onDestroy(() => {

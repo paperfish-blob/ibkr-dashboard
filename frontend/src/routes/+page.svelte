@@ -3,14 +3,36 @@
   import PageHeader from "$lib/components/PageHeader.svelte";
   import HeadlineStat from "$lib/components/HeadlineStat.svelte";
   import CumulativeChart from "$lib/components/CumulativeChart.svelte";
+  import MonthlyPnL from "$lib/components/MonthlyPnL.svelte";
+  import IndexBenchmark from "$lib/components/IndexBenchmark.svelte";
   import StatusBadges from "$lib/components/StatusBadges.svelte";
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
   import AlertBar from "$lib/components/AlertBar.svelte";
   import PeriodPicker from "$lib/components/PeriodPicker.svelte";
+  import { api, type OHLCVBar } from "$lib/api";
   import { pnl, pnlLoading, pnlError, refreshPnL } from "$lib/stores";
 
   const POLL_MS = 30_000;
   let refreshing = $state(false);
+
+  // Month hovered in MonthlyPnL, synced to IndexBenchmark's own chart so a
+  // month highlighted in one highlights in both.
+  let hoveredMonth = $state<string | null>(null);
+
+  // 1Y (252 trading days ~= 365 calendar days) plus MA200's own warm-up
+  // buffer (400 calendar days, same reasoning as the position detail page's
+  // MA200_WARMUP_DAYS) -- the index chart's own 1Y tile needs a full year of
+  // real bars behind it, not just enough for the moving averages.
+  const IDX_LOOKBACK_DAYS = 765;
+  let qqqBars = $state<OHLCVBar[]>([]);
+  onMount(() => {
+    api
+      .marketDataOhlcv("QQQ", IDX_LOOKBACK_DAYS)
+      .then((r) => {
+        if (r.ok) qqqBars = r.bars;
+      })
+      .catch(() => {});
+  });
 
   // "All" merges only the years already downloaded, so it has to say which.
   const coverage = $derived.by(() => {
@@ -73,6 +95,10 @@
     <HeadlineStat data={$pnl} />
     <div class="gap"></div>
     <CumulativeChart series={$pnl.series} currency={$pnl.currency} />
+    <div class="gap"></div>
+    <IndexBenchmark symbol="QQQ" name="Nasdaq 100" bars={qqqBars} highlightMonth={hoveredMonth} />
+    <div class="gap"></div>
+    <MonthlyPnL series={$pnl.series} currency={$pnl.currency} onHoverMonth={(m) => (hoveredMonth = m)} />
   {:else}
     <div class="panel-empty">
       Could not load P&amp;L. Check that the backend is running on port 9001.

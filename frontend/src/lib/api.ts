@@ -61,6 +61,7 @@ export interface CumulativePoint {
   date: IsoDate;
   realized_pnl: DecimalString;
   cumulative: DecimalString;
+  trade_count: number;
 }
 
 export interface DayGroup {

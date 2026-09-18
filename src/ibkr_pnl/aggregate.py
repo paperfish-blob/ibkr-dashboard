@@ -40,9 +40,12 @@ def _build_series(trades: list[RealizedTrade]) -> list[CumulativePoint]:
     running = Decimal(0)
     ordered = sorted(trades, key=lambda t: t.trade_date)
     for day, group in groupby(ordered, key=lambda t: t.trade_date):
-        daily = sum((t.realized_pnl for t in group), Decimal(0))
+        day_trades = list(group)
+        daily = sum((t.realized_pnl for t in day_trades), Decimal(0))
         running += daily
-        points.append(CumulativePoint(date=day, realized_pnl=daily, cumulative=running))
+        points.append(
+            CumulativePoint(date=day, realized_pnl=daily, cumulative=running, trade_count=len(day_trades))
+        )
     return points
 
 
@@ -128,6 +131,9 @@ def combine(
                 date=today,
                 realized_pnl=today_total,
                 cumulative=running + today_total,
+                # Gateway gives an aggregate P&L figure only, never a trade-level
+                # count, so today only gets a real count when Flex supplied it.
+                trade_count=len(flex_today_realizing) if today_source == "flex" else 0,
             )
         )
 

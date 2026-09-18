@@ -90,6 +90,7 @@ class CumulativePoint(BaseModel):
     date: date
     realized_pnl: Decimal  # that day's realized P&L (gross -- see net_pnl)
     cumulative: Decimal  # running total through that day
+    trade_count: int = 0  # executions that day, opens and closes alike
 
 
 class DayGroup(BaseModel):
