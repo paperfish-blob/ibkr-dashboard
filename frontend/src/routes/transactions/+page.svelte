@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { browser } from "$app/environment";
+  import { goto } from "$app/navigation";
+  import { page } from "$app/state";
   import PageHeader from "$lib/components/PageHeader.svelte";
   import SegToggle from "$lib/components/SegToggle.svelte";
   import SymbolFilter from "$lib/components/SymbolFilter.svelte";
@@ -14,6 +17,8 @@
     transactionsLoading,
     transactionsError,
     refreshTransactions,
+    period,
+    setPeriod,
     txFilter,
     txSymbols,
     txMonths,
@@ -23,6 +28,60 @@
 
   const POLL_MS = 30_000;
   let refreshing = $state(false);
+
+  // Seed filters from the URL once, on load. Anything absent or invalid
+  // leaves the store at whatever persisted() already restored from
+  // localStorage. The sync effect below never reads the URL back, so
+  // this can't loop with it.
+  if (browser) {
+    const qs = page.url.searchParams;
+
+    const year = qs.get("year");
+    if (year && /^(all|\d{4})$/.test(year)) setPeriod(year);
+
+    const filter = qs.get("filter");
+    if (filter === "all" || filter === "realized" || filter === "opening") txFilter.set(filter);
+
+    const symbols = qs.get("symbols");
+    if (symbols) txSymbols.set(symbols.split(",").filter(Boolean));
+
+    const months = qs.get("months");
+    if (months) txMonths.set(months.split(",").filter(Boolean));
+
+    if (qs.get("group") === "1") txGroupFills.set(true);
+  }
+
+  // A month outside the active year can never match a trade -- "Jan 2026"
+  // is meaningless once the year picker is on 2025. Rather than let that
+  // combination sit there (and end up shareable in the URL), drop any
+  // out-of-year months whenever the year changes, from any source: the
+  // year picker, or a URL that named a mismatched year/months pair. Runs
+  // once more after its own txMonths.set() with kept.length unchanged, so
+  // it settles rather than looping.
+  $effect(() => {
+    if ($period === "all") return;
+    const kept = $txMonths.filter((m) => m.startsWith(`${$period}-`));
+    if (kept.length !== $txMonths.length) txMonths.set(kept);
+  });
+
+  // Keep the URL in sync with the filters, one-way (store -> URL). Only
+  // reads the filter stores, never page.url, so it can't feed back into
+  // itself via goto()'s own URL update.
+  $effect(() => {
+    const parts: string[] = [];
+    if ($period !== "all") parts.push(`year=${$period}`);
+    if ($txFilter !== "all") parts.push(`filter=${$txFilter}`);
+    if ($txSymbols.length > 0) parts.push(`symbols=${$txSymbols.join(",")}`);
+    if ($txMonths.length > 0) parts.push(`months=${$txMonths.join(",")}`);
+    if ($txGroupFills) parts.push("group=1");
+
+    const qs = parts.join("&");
+    goto(qs ? `/transactions?${qs}` : "/transactions", {
+      replaceState: true,
+      noScroll: true,
+      keepFocus: true,
+    });
+  });
 
   const FILTERS = [
     { label: "All trades", value: "all" },

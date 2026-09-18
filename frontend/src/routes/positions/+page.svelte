@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { browser } from "$app/environment";
+  import { goto } from "$app/navigation";
+  import { page } from "$app/state";
   import PageHeader from "$lib/components/PageHeader.svelte";
   import SegToggle from "$lib/components/SegToggle.svelte";
   import SymbolFilter from "$lib/components/SymbolFilter.svelte";
@@ -13,6 +16,8 @@
     positionsLoading,
     positionsError,
     refreshPositions,
+    period,
+    setPeriod,
     posFilter,
     posSymbols,
     posCarryInOnly,
@@ -23,6 +28,47 @@
 
   const POLL_MS = 30_000;
   let refreshing = $state(false);
+
+  // Seed filters from the URL once, on load. Anything absent or invalid
+  // leaves the store at whatever persisted() already restored from
+  // localStorage. The sync effect below never reads the URL back, so
+  // this can't loop with it.
+  if (browser) {
+    const qs = page.url.searchParams;
+
+    const year = qs.get("year");
+    if (year && /^(all|\d{4})$/.test(year)) setPeriod(year);
+
+    const filter = qs.get("filter");
+    if (filter === "all" || filter === "open" || filter === "closed") posFilter.set(filter);
+
+    const symbols = qs.get("symbols");
+    if (symbols) posSymbols.set(symbols.split(",").filter(Boolean));
+
+    if (qs.get("carryIn") === "1") posCarryInOnly.set(true);
+
+    const groupBy = qs.get("groupBy");
+    if (groupBy === "exit" || groupBy === "entry") posGroupBy.set(groupBy);
+  }
+
+  // Keep the URL in sync with the filters, one-way (store -> URL). Only
+  // reads the filter stores, never page.url, so it can't feed back into
+  // itself via goto()'s own URL update.
+  $effect(() => {
+    const parts: string[] = [];
+    if ($period !== "all") parts.push(`year=${$period}`);
+    if ($posFilter !== "all") parts.push(`filter=${$posFilter}`);
+    if ($posSymbols.length > 0) parts.push(`symbols=${$posSymbols.join(",")}`);
+    if ($posCarryInOnly) parts.push("carryIn=1");
+    if ($posGroupBy !== "exit") parts.push(`groupBy=${$posGroupBy}`);
+
+    const qs = parts.join("&");
+    goto(qs ? `/positions?${qs}` : "/positions", {
+      replaceState: true,
+      noScroll: true,
+      keepFocus: true,
+    });
+  });
 
   const FILTERS = [
     { label: "All", value: "all" },

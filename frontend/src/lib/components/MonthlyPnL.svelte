@@ -178,6 +178,15 @@
     onHoverMonth?.(i === null ? null : months[i].key);
   }
 
+  // Clicking a month drills into its own trades on the Transactions page --
+  // opening trades, grouped, since that's what explains where a month's
+  // realized P&L actually came from. New tab so the Overview page (and its
+  // current hover state) stays put behind it.
+  function openMonth(key: string) {
+    const year = key.slice(0, 4);
+    window.open(`/transactions?year=${year}&filter=opening&months=${key}&group=1`, "_blank");
+  }
+
   function tooltipPos(box: HTMLDivElement | undefined, bar: SVGPathElement | undefined) {
     if (!box || !bar) return null;
     const barRect = bar.getBoundingClientRect();
@@ -218,7 +227,8 @@
               width={barLayout.barW + BAR_GAP}
               height={PNL_H}
               onmousemove={() => setHoveredIndex(i)}
-            />
+              onclick={() => openMonth(m.key)}
+            ><title>Open {m.label} in Transactions</title></rect>
           {/each}
           <line class="zero-line" x1={PAD_L} y1={pnlBars.zeroY} x2={CHART_W - PAD_R} y2={pnlBars.zeroY} />
           {#each pnlBars.bars as bar, i (bar.key)}
@@ -268,7 +278,8 @@
               width={barLayout.barW + BAR_GAP}
               height={TRADES_H}
               onmousemove={() => setHoveredIndex(i)}
-            />
+              onclick={() => openMonth(m.key)}
+            ><title>Open {m.label} in Transactions</title></rect>
           {/each}
           <line class="base-line" x1={PAD_L} y1={tradesBars.baseY} x2={CHART_W - PAD_R} y2={tradesBars.baseY} />
           {#each tradesBars.bars as bar, i (bar.key)}
@@ -307,11 +318,11 @@
     <div class="body">
       <div class="tiles">
         {#each months as m (m.key)}
-          <div class="tile">
+          <button class="tile" onclick={() => openMonth(m.key)} title="Open {m.label} in Transactions">
             <div class="tile-month">{m.label}</div>
             <div class="tile-val {toneOf(m.total)}">{fmtMoney(m.total, currency)}</div>
             <div class="tile-trades">{m.trades} trade{m.trades === 1 ? "" : "s"}</div>
-          </div>
+          </button>
         {/each}
       </div>
     </div>
@@ -486,6 +497,14 @@
     border-radius: var(--radius-md);
     background: var(--surface-02);
     border: 1px solid var(--border-05);
+    font: inherit;
+    text-align: left;
+    cursor: pointer;
+    width: 100%;
+  }
+  .tile:hover {
+    background: var(--surface-04);
+    border-color: var(--border-12);
   }
   .tile-month {
     font-size: var(--text-2xs);
