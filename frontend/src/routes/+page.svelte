@@ -96,9 +96,10 @@
     <div class="gap"></div>
     <CumulativeChart series={$pnl.series} currency={$pnl.currency} />
     <div class="gap"></div>
-    <IndexBenchmark symbol="QQQ" name="Nasdaq 100" bars={qqqBars} highlightMonth={hoveredMonth} />
-    <div class="gap"></div>
-    <MonthlyPnL series={$pnl.series} currency={$pnl.currency} onHoverMonth={(m) => (hoveredMonth = m)} />
+    <div class="side-grid">
+      <MonthlyPnL series={$pnl.series} currency={$pnl.currency} onHoverMonth={(m) => (hoveredMonth = m)} />
+      <IndexBenchmark symbol="QQQ" name="Nasdaq 100" bars={qqqBars} highlightMonth={hoveredMonth} />
+    </div>
   {:else}
     <div class="panel-empty">
       Could not load P&amp;L. Check that the backend is running on port 9001.
@@ -113,6 +114,17 @@
   }
   .gap {
     height: 24px;
+  }
+  .side-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 18px;
+    align-items: start;
+  }
+  @media (max-width: 900px) {
+    .side-grid {
+      grid-template-columns: 1fr;
+    }
   }
   .coverage {
     font-size: var(--text-xs);

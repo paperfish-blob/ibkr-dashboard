@@ -87,8 +87,30 @@
   let resizeObs: ResizeObserver | null = null;
 
   let restoreView: (() => void) | null = null;
+  // Exposed the same way restoreView is, so the highlightMonth effect below
+  // can put the view back once a hover-driven zoom clears -- without also
+  // resetting viewMoved/interacted the way restoreView does, since zooming
+  // to a highlighted month isn't the user panning the chart themselves.
+  let applyDefaultViewRef: (() => void) | null = null;
   let interactAbort: AbortController | null = null;
   let viewMoved = $state(false);
+
+  // A hovered month gets a window this many days wider than the month
+  // itself on each side, so there's context around it rather than the
+  // month's own bars alone filling the whole plot edge to edge.
+  const MONTH_ZOOM_PADDING_DAYS = 30;
+  function zoomToMonth(monthKey: string) {
+    if (!chart) return;
+    const [y, m] = monthKey.split("-").map(Number);
+    const from = new Date(y, m - 1, 1);
+    from.setDate(from.getDate() - MONTH_ZOOM_PADDING_DAYS);
+    const to = new Date(y, m, 1); // first of the following month
+    to.setDate(to.getDate() + MONTH_ZOOM_PADDING_DAYS);
+    chart.timeScale().setVisibleRange({
+      from: Math.floor(from.getTime() / 1000) as unknown as Time,
+      to: Math.floor(to.getTime() / 1000) as unknown as Time,
+    });
+  }
 
   $effect(() => {
     if (!container || !history?.length) return;
@@ -281,6 +303,7 @@
     };
 
     applyDefaultView();
+    applyDefaultViewRef = applyDefaultView;
 
     let interacted = false;
     let programmatic = false;
@@ -350,6 +373,14 @@
         color: !month || b.time.startsWith(month) ? "rgba(0,0,0,0)" : "rgba(255,255,255,0.68)",
       })),
     );
+    // Zoom into the highlighted month's own window rather than leaving the
+    // chart at its wider default view, where one month can be a sliver a
+    // few px wide -- then put the view back once the hover clears.
+    if (month) {
+      zoomToMonth(month);
+    } else {
+      applyDefaultViewRef?.();
+    }
   });
 
   onDestroy(() => {
@@ -357,6 +388,7 @@
     chart?.remove();
     interactAbort?.abort();
     restoreView = null;
+    applyDefaultViewRef = null;
   });
 </script>
 
