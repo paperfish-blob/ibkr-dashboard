@@ -21,7 +21,16 @@
   import PeriodPicker from "$lib/components/PeriodPicker.svelte";
   import { api, type OHLCVBar, type CumulativePoint, type Position } from "$lib/api";
   import { num } from "$lib/format";
-  import { positions, positionsLoading, positionsError, refreshPositions, posGroupBy, type PosGroupBy } from "$lib/stores";
+  import {
+    positions,
+    positionsLoading,
+    positionsError,
+    refreshPositions,
+    posGroupBy,
+    type PosGroupBy,
+    monthlyPnlView,
+    type MonthlyPnlView,
+  } from "$lib/stores";
 
   const POLL_MS = 30_000;
   let refreshing = $state(false);
@@ -99,6 +108,38 @@
   }
 
   const winRates = $derived($positions ? buildWinRates($positions.positions, $posGroupBy) : new Map());
+
+  // "YYYY-MM" -> aggregate win/loss dollars among that month's closed
+  // positions, under the same date/groupBy rules as buildWinRates above --
+  // kept as sums+counts rather than a pre-divided ratio so the panel can
+  // compute both the per-month and the overall (weighted, not averaged)
+  // avg-win/avg-loss ratio from the same numbers.
+  function buildRRStats(
+    all: Position[],
+    groupBy: PosGroupBy,
+  ): Map<string, { winSum: number; winCount: number; lossSum: number; lossCount: number }> {
+    const dateOf = groupBy === "exit" ? (p: Position) => p.exit_date : (p: Position) => p.open_date;
+    const stats = new Map<string, { winSum: number; winCount: number; lossSum: number; lossCount: number }>();
+    for (const p of all) {
+      if (p.is_open) continue;
+      const d = dateOf(p);
+      if (!d) continue;
+      const key = d.slice(0, 7);
+      const b = stats.get(key) ?? { winSum: 0, winCount: 0, lossSum: 0, lossCount: 0 };
+      const pnl = num(p.realized_pnl);
+      if (pnl > 0) {
+        b.winSum += pnl;
+        b.winCount += 1;
+      } else if (pnl < 0) {
+        b.lossSum += -pnl;
+        b.lossCount += 1;
+      }
+      stats.set(key, b);
+    }
+    return stats;
+  }
+
+  const rrStats = $derived($positions ? buildRRStats($positions.positions, $posGroupBy) : new Map());
 
   // Same reasoning as the main Overview page: hovering a month older than
   // what's been fetched has no bars for the QQQ chart to zoom to, so the
@@ -200,7 +241,10 @@
         caption={monthCaption}
         monthLink={positionsMonthLink}
         {winRates}
+        {rrStats}
         onHoverMonth={(m) => (hoveredMonth = m)}
+        view={$monthlyPnlView}
+        onViewChange={(v: MonthlyPnlView) => monthlyPnlView.set(v)}
       />
       <IndexBenchmark symbol="QQQ" name="Nasdaq 100" bars={qqqBars} highlightMonth={hoveredMonth} />
     </div>

@@ -9,6 +9,7 @@
    */
   import { fmtPriceLike, num } from "$lib/format";
   import type { OHLCVBar } from "$lib/api";
+  import { period } from "$lib/stores";
   import SymbolChart from "./SymbolChart.svelte";
 
   interface Props {
@@ -18,6 +19,26 @@
     highlightMonth?: string | null;
   }
   let { symbol, name, bars, highlightMonth = null }: Props = $props();
+
+  // When a specific year is selected in the period picker, every tile
+  // (and the chart's own default view, via SymbolChart's own
+  // "last bar in history" anchor) shifts to be relative to THAT year
+  // instead of today -- "1Y" becomes ~that whole year, "YTD" becomes
+  // Jan 1 of that year to its own year-end, and the price shown is that
+  // year's own last close, not today's live price. Trims only the end
+  // (bars after that year) so everything before it -- prior years, needed
+  // for a trailing lookback or MA warmup near the start of the year --
+  // stays intact. "All" (or anything not a bare year) is unchanged: bars
+  // as fetched, anchored on today, exactly as before.
+  const anchoredBars = $derived.by(() => {
+    if (!/^\d{4}$/.test($period)) return bars;
+    const cutoff = `${$period}-12-31`;
+    let idx = -1;
+    for (let i = 0; i < bars.length; i++) {
+      if (bars[i].time <= cutoff) idx = i;
+    }
+    return idx === -1 ? bars : bars.slice(0, idx + 1);
+  });
 
   interface Tf {
     k: "1MO" | "3MO" | "6MO" | "1Y" | "YTD";
@@ -37,22 +58,24 @@
   // period tiles use -- not calendar days, so weekends/holidays don't skew
   // "1 month" short.
   function pctChangeAt(tradingDaysBack: number): number | null {
-    if (bars.length < 2) return null;
-    const lastIdx = bars.length - 1;
+    const b = anchoredBars;
+    if (b.length < 2) return null;
+    const lastIdx = b.length - 1;
     const idx = lastIdx - tradingDaysBack;
     if (idx < 0) return null;
-    const base = bars[idx].close;
+    const base = b[idx].close;
     if (base === 0) return null;
-    return ((bars[lastIdx].close - base) / base) * 100;
+    return ((b[lastIdx].close - base) / base) * 100;
   }
   function pctChangeYTD(): number | null {
-    if (bars.length < 2) return null;
-    const lastYear = bars[bars.length - 1].time.slice(0, 4);
-    const idx = bars.findIndex((b) => b.time.slice(0, 4) === lastYear);
+    const b = anchoredBars;
+    if (b.length < 2) return null;
+    const lastYear = b[b.length - 1].time.slice(0, 4);
+    const idx = b.findIndex((x) => x.time.slice(0, 4) === lastYear);
     if (idx < 0) return null;
-    const base = bars[idx].close;
+    const base = b[idx].close;
     if (base === 0) return null;
-    return ((bars[bars.length - 1].close - base) / base) * 100;
+    return ((b[b.length - 1].close - base) / base) * 100;
   }
   function tfValue(tf: Tf): number | null {
     return tf.k === "YTD" ? pctChangeYTD() : pctChangeAt(tf.daysBack!);
@@ -62,7 +85,7 @@
   const activeRow = $derived(tfRows.find((r) => r.tf.k === activeTf) ?? tfRows[0]);
 
   const visibleMonths = $derived.by((): number | undefined => {
-    if (!bars.length) return undefined;
+    if (!anchoredBars.length) return undefined;
     switch (activeTf) {
       case "1MO":
         return 1;
@@ -73,11 +96,11 @@
       case "1Y":
         return 12;
       case "YTD":
-        return new Date(bars[bars.length - 1].time).getMonth() + 1;
+        return new Date(anchoredBars[anchoredBars.length - 1].time).getMonth() + 1;
     }
   });
 
-  const lastClose = $derived(bars.length ? bars[bars.length - 1].close : null);
+  const lastClose = $derived(anchoredBars.length ? anchoredBars[anchoredBars.length - 1].close : null);
 </script>
 
 <div class="panel">
@@ -98,8 +121,8 @@
       </div>
     </div>
 
-    {#if bars.length}
-      <SymbolChart history={bars} height={260} {visibleMonths} {highlightMonth} regimeBands apsPane extendedAlerts />
+    {#if anchoredBars.length}
+      <SymbolChart history={anchoredBars} height={260} {visibleMonths} {highlightMonth} regimeBands apsPane extendedAlerts />
 
       <div class="idx-tfs">
         {#each tfRows as { tf, value } (tf.k)}

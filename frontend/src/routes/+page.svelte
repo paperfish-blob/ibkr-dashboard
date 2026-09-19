@@ -10,7 +10,7 @@
   import AlertBar from "$lib/components/AlertBar.svelte";
   import PeriodPicker from "$lib/components/PeriodPicker.svelte";
   import { api, type OHLCVBar } from "$lib/api";
-  import { pnl, pnlLoading, pnlError, refreshPnL } from "$lib/stores";
+  import { pnl, pnlLoading, pnlError, refreshPnL, monthlyPnlView, type MonthlyPnlView } from "$lib/stores";
 
   const POLL_MS = 30_000;
   let refreshing = $state(false);
@@ -116,7 +116,13 @@
     <CumulativeChart series={$pnl.series} currency={$pnl.currency} />
     <div class="gap"></div>
     <div class="side-grid">
-      <MonthlyPnL series={$pnl.series} currency={$pnl.currency} onHoverMonth={(m) => (hoveredMonth = m)} />
+      <MonthlyPnL
+        series={$pnl.series}
+        currency={$pnl.currency}
+        onHoverMonth={(m) => (hoveredMonth = m)}
+        view={$monthlyPnlView}
+        onViewChange={(v: MonthlyPnlView) => monthlyPnlView.set(v)}
+      />
       <IndexBenchmark symbol="QQQ" name="Nasdaq 100" bars={qqqBars} highlightMonth={hoveredMonth} />
     </div>
   {:else}

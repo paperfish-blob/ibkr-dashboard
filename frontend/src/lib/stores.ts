@@ -136,6 +136,14 @@ export type PosGroupBy = "exit" | "entry";
  *  even if some took days to close. */
 export const posGroupBy = persisted<PosGroupBy>("ibkr.pos.groupBy", "exit");
 
+export type MonthlyPnlView = "charts" | "table";
+
+/** Layout the Monthly panel (MonthlyPnL.svelte) renders in -- stacked bar
+ *  charts (default) or a dense scorecard table, which holds up better once
+ *  a period has 20+ months. Shared by every page that embeds the panel, so
+ *  the choice follows you between Overview and Positions Overview. */
+export const monthlyPnlView = persisted<MonthlyPnlView>("ibkr.monthlyPnl.view", "charts");
+
 /** Selected period: "all" or a four-digit year. Shared by Overview,
  *  Transactions and Positions so the choice follows you between them.
  *  Defaults to "all" so a freshly downloaded year shows up without anyone
