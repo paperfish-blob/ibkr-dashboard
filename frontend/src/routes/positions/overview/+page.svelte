@@ -166,6 +166,71 @@
 
   const rrStats = $derived($positions ? buildRRStats($positions.positions, $posGroupBy) : new Map());
 
+  // "YYYY-MM" -> the longest run of consecutive winning positions and the
+  // longest run of consecutive losing positions within that month, walked
+  // in the order those positions actually closed (or opened, under
+  // "entry") -- a flat ($0) position breaks both streaks rather than
+  // extending either, same as it counting toward neither win nor loss in
+  // buildWinRates above. Same date field as every other monthly build here,
+  // but grouped into per-month position lists first since a streak (unlike
+  // a sum or a count) depends on order, not just membership.
+  function buildStreaks(
+    all: Position[],
+    groupBy: PosGroupBy,
+  ): Map<string, { maxWinStreak: number; maxLossStreak: number }> {
+    const dateOf = groupBy === "exit" ? (p: Position) => p.exit_date : (p: Position) => p.open_date;
+    const timeOf =
+      groupBy === "exit"
+        ? (p: Position) => p.exit_legs[p.exit_legs.length - 1]?.trade_time ?? ""
+        : (p: Position) => p.open_time;
+
+    const byMonth = new Map<string, Position[]>();
+    for (const p of all) {
+      if (p.is_open) continue;
+      const d = dateOf(p);
+      if (!d) continue;
+      const key = d.slice(0, 7);
+      const list = byMonth.get(key) ?? [];
+      list.push(p);
+      byMonth.set(key, list);
+    }
+
+    const result = new Map<string, { maxWinStreak: number; maxLossStreak: number }>();
+    for (const [key, monthPositions] of byMonth) {
+      const sorted = monthPositions.slice().sort((a, b) => {
+        const da = dateOf(a)!;
+        const db = dateOf(b)!;
+        if (da !== db) return da < db ? -1 : 1;
+        const ta = timeOf(a);
+        const tb = timeOf(b);
+        return ta < tb ? -1 : ta > tb ? 1 : 0;
+      });
+      let win = 0;
+      let loss = 0;
+      let maxWinStreak = 0;
+      let maxLossStreak = 0;
+      for (const p of sorted) {
+        const pnl = num(p.realized_pnl);
+        if (pnl > 0) {
+          win += 1;
+          loss = 0;
+          maxWinStreak = Math.max(maxWinStreak, win);
+        } else if (pnl < 0) {
+          loss += 1;
+          win = 0;
+          maxLossStreak = Math.max(maxLossStreak, loss);
+        } else {
+          win = 0;
+          loss = 0;
+        }
+      }
+      result.set(key, { maxWinStreak, maxLossStreak });
+    }
+    return result;
+  }
+
+  const streaks = $derived($positions ? buildStreaks($positions.positions, $posGroupBy) : new Map());
+
   // Same reasoning as the main Overview page: hovering a month older than
   // what's been fetched has no bars for the QQQ chart to zoom to, so the
   // window grows to cover this page's own earliest bucketed date (which
@@ -272,6 +337,7 @@
         monthLink={positionsMonthLink}
         {winRates}
         {rrStats}
+        {streaks}
         onHoverMonth={(m) => (hoveredMonth = m)}
         view={$monthlyPnlView}
         onViewChange={(v: MonthlyPnlView) => monthlyPnlView.set(v)}

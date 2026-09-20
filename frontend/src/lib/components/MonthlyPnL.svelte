@@ -41,6 +41,16 @@
      *  position) and an R:R line on each tile. Positions Overview only,
      *  same as winRates. */
     rrStats?: Map<string, { winSum: number; winCount: number; lossSum: number; lossCount: number }>;
+    /** "YYYY-MM" -> the longest run of consecutive winning positions and the
+     *  longest run of consecutive losing positions within that month, in
+     *  the order they actually closed -- when given, adds a max-streak pair
+     *  to the table view's columns and the tile grid. Positions Overview
+     *  only, same as winRates/rrStats. Not its own chart row: unlike win
+     *  rate/R:R, a streak is not naturally a bar height (it's a count of
+     *  events, not a rate or a ratio), and this panel already grew one row
+     *  per new metric long enough that Table view exists specifically to
+     *  stop that. */
+    streaks?: Map<string, { maxWinStreak: number; maxLossStreak: number }>;
     /** Fired with the hovered month's "YYYY-MM" key (or null on clear) --
      *  lets a sibling chart elsewhere on the page (e.g. an index benchmark)
      *  sync its own highlight to the same month. */
@@ -61,6 +71,7 @@
     monthLink = (key) => `/transactions?year=${key.slice(0, 4)}&filter=opening&months=${key}&group=1`,
     winRates,
     rrStats,
+    streaks,
     onHoverMonth,
     view = "charts",
     onViewChange,
@@ -75,6 +86,8 @@
     trades: number;
     winRate: number | null; // 0-100, null when winRates has nothing for this month
     rr: number | null; // avg win / avg loss, null when there's no loss (or no win) to divide by
+    maxWinStreak: number | null; // null when streaks has nothing for this month, 0 is a real value
+    maxLossStreak: number | null;
   }
 
   const months = $derived.by((): MonthBucket[] => {
@@ -88,7 +101,17 @@
         const w = winRates?.get(key);
         const r = rrStats?.get(key);
         const rr = r && r.winCount > 0 && r.lossCount > 0 ? (r.winSum / r.winCount) / (r.lossSum / r.lossCount) : null;
-        b = { key, label, total: 0, trades: 0, winRate: w && w.total > 0 ? (w.wins / w.total) * 100 : null, rr };
+        const s = streaks?.get(key);
+        b = {
+          key,
+          label,
+          total: 0,
+          trades: 0,
+          winRate: w && w.total > 0 ? (w.wins / w.total) * 100 : null,
+          rr,
+          maxWinStreak: streaks ? (s?.maxWinStreak ?? 0) : null,
+          maxLossStreak: streaks ? (s?.maxLossStreak ?? 0) : null,
+        };
         buckets.set(key, b);
       }
       b.total += num(p.realized_pnl);
@@ -477,6 +500,10 @@
             <th class="num">{unitCountLabel}</th>
             {#if winRates}<th class="num">Win rate</th>{/if}
             {#if rrStats}<th class="num">Avg R:R</th>{/if}
+            {#if streaks}
+              <th class="num">Max win streak</th>
+              <th class="num">Max loss streak</th>
+            {/if}
           </tr>
         </thead>
         <tbody>
@@ -521,6 +548,18 @@
                 <td class="num">
                   <span class="rr-chip {m.rr === null ? 'none' : m.rr >= RR_REF ? 'hi' : 'lo'}">
                     {m.rr === null ? EM_DASH : `${m.rr.toFixed(1)}R`}
+                  </span>
+                </td>
+              {/if}
+              {#if streaks}
+                <td class="num">
+                  <span class="rr-chip {m.maxWinStreak ? 'hi' : 'none'}">
+                    {m.maxWinStreak ? `${m.maxWinStreak}W` : EM_DASH}
+                  </span>
+                </td>
+                <td class="num">
+                  <span class="rr-chip {m.maxLossStreak ? 'lo' : 'none'}">
+                    {m.maxLossStreak ? `${m.maxLossStreak}L` : EM_DASH}
                   </span>
                 </td>
               {/if}
@@ -764,7 +803,7 @@
             <div class="tile-month">{m.label}</div>
             <div class="tile-val {toneOf(m.total)}">{fmtMoney(m.total, currency)}</div>
             <div class="tile-trades">{m.trades} {m.trades === 1 ? unit : unitPlural}</div>
-            {#if m.winRate !== null || m.rr !== null}
+            {#if m.winRate !== null || m.rr !== null || m.maxWinStreak || m.maxLossStreak}
               <div class="tile-stats">
                 {#if m.winRate !== null}
                   <div class="tile-win {m.winRate >= WIN_RATE_THRESHOLD ? 'hi' : 'lo'}" title="Win rate">
@@ -774,6 +813,16 @@
                 {#if m.rr !== null}
                   <div class="tile-rr {m.rr >= RR_REF ? 'hi' : 'lo'}" title="Avg R:R">
                     <span class="dot"></span>{m.rr.toFixed(1)}R avg
+                  </div>
+                {/if}
+                {#if m.maxWinStreak}
+                  <div class="tile-win hi" title="Max consecutive wins">
+                    <span class="dot"></span>{m.maxWinStreak}W streak
+                  </div>
+                {/if}
+                {#if m.maxLossStreak}
+                  <div class="tile-rr lo" title="Max consecutive losses">
+                    <span class="dot"></span>{m.maxLossStreak}L streak
                   </div>
                 {/if}
               </div>
