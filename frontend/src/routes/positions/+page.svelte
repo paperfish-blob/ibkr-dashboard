@@ -360,7 +360,16 @@
   {#if $positionsLoading && !$positions}
     <SkeletonCard height={480} rows={8} />
   {:else if $positions}
-    <StreakFlow runs={streakRuns} {currency} />
+    <StreakFlow
+      runs={streakRuns}
+      {currency}
+      selectedFrom={$posDateFrom}
+      selectedTo={$posDateTo}
+      onSelectRun={(from, to) => {
+        posDateFrom.set(clipToPeriod(from));
+        posDateTo.set(clipToPeriod(to));
+      }}
+    />
     <div class="gap"></div>
     <PositionsTable positions={filtered} {currency} groupBy={$posGroupBy} />
   {:else}

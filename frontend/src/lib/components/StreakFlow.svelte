@@ -5,6 +5,12 @@
    * streak drops down in red, and the bar's height is the streak length.
    * Same visual grammar as the P&L bar charts elsewhere in the app, just
    * one bar per run instead of one per month.
+   *
+   * Bar width has a floor (MIN_BAR_W) below which bars stay legible instead
+   * of shrinking further -- "All" can easily produce 200+ runs. Past that
+   * floor the chart's own width grows past the panel and scrolls, rather
+   * than clipping the overflow (which used to silently drop the most
+   * recent runs -- including the current streak -- off the right edge).
    */
   import { fmtMoney, toneOf } from "$lib/format";
 
@@ -19,12 +25,34 @@
   interface Props {
     runs: StreakRun[];
     currency?: string;
+    /** The Positions page's own date-range filter, so a run whose
+     *  start/end exactly matches it can render as selected -- this stays
+     *  in sync even when that range was set some other way (the Filters
+     *  popover, a URL param), not only by clicking a bar here. */
+    selectedFrom?: string | null;
+    selectedTo?: string | null;
+    /** Fired with a run's [start, end], or [null, null] to clear -- the
+     *  caller owns the actual date-range filter; this component only ever
+     *  proposes what it should be set to. */
+    onSelectRun?: (from: string | null, to: string | null) => void;
   }
-  let { runs, currency = "USD" }: Props = $props();
+  let { runs, currency = "USD", selectedFrom = null, selectedTo = null, onSelectRun }: Props = $props();
 
   const maxWinStreak = $derived(Math.max(0, ...runs.filter((r) => r.outcome === "win").map((r) => r.length)));
   const maxLossStreak = $derived(Math.max(0, ...runs.filter((r) => r.outcome === "loss").map((r) => r.length)));
   const currentRun = $derived(runs.length ? runs[runs.length - 1] : null);
+  const selectedIndex = $derived(
+    selectedFrom && selectedTo ? runs.findIndex((r) => r.start === selectedFrom && r.end === selectedTo) : -1,
+  );
+
+  function selectRun(i: number) {
+    if (!onSelectRun) return;
+    if (i === selectedIndex) {
+      onSelectRun(null, null);
+    } else {
+      onSelectRun(runs[i].start, runs[i].end);
+    }
+  }
 
   // Month + year, not month + day -- this account's history can span
   // several years, and a bare day/month risks two genuinely different
@@ -40,25 +68,36 @@
 
   // ---- bar geometry -- same shared-column approach as MonthlyPnL's own
   // charts, just keyed by run index instead of month. ----
-  const CHART_W = 860;
   const PAD_L = 6;
   const PAD_R = 6;
-  const PAD_T = 10;
-  const PAD_B = 16;
-  const GAP = 4;
-  const CHART_H = 96;
+  const PAD_T = 16;
+  const PAD_B = 22;
+  const GAP = 3;
+  const CHART_H = 160;
+  const MIN_BAR_W = 10;
+  const OVERVIEW_H = 30;
+
+  let box: HTMLDivElement | undefined = $state();
+  let scrollEl: HTMLDivElement | undefined = $state();
+  let overviewEl: HTMLDivElement | undefined = $state();
+  let availW = $state(860);
 
   const layout = $derived.by(() => {
     if (!runs.length) return null;
     const n = runs.length;
-    const plotW = CHART_W - PAD_L - PAD_R;
-    const barW = Math.max(2, (plotW - GAP * (n - 1)) / n);
+    const plotW = Math.max(0, availW - PAD_L - PAD_R);
+    const naturalBarW = (plotW - GAP * (n - 1)) / n;
+    // Below MIN_BAR_W, stop shrinking bars to fit and grow the chart's own
+    // width instead -- the wrapping .bars-scroll takes it from there.
+    const scrolling = naturalBarW < MIN_BAR_W;
+    const barW = scrolling ? MIN_BAR_W : Math.max(1, naturalBarW);
+    const contentW = scrolling ? PAD_L + PAD_R + n * (barW + GAP) - GAP : availW;
     const xs = runs.map((_, i) => PAD_L + i * (barW + GAP));
     const plotH = CHART_H - PAD_T - PAD_B;
     const zeroY = PAD_T + plotH * 0.5;
     const upScale = (plotH * 0.5) / (maxWinStreak || 1);
     const downScale = (plotH * 0.5) / (maxLossStreak || 1);
-    return { barW, xs, zeroY, upScale, downScale };
+    return { barW, xs, zeroY, upScale, downScale, contentW, scrolling };
   });
 
   function barPath(x: number, y: number, w: number, h: number, up: boolean, r: number): string {
@@ -73,6 +112,8 @@
     y: number;
     w: number;
     h: number;
+    d: string;
+    isRecord: boolean;
   }
 
   const bars = $derived.by((): Bar[] | null => {
@@ -82,12 +123,22 @@
       const up = r.outcome === "win";
       const h = r.length * (up ? upScale : downScale);
       const y = up ? zeroY - h : zeroY;
-      return { ...r, x: xs[i], y, w: barW, h };
+      const radius = Math.min(3, barW / 2, h);
+      const isRecord = up
+        ? maxWinStreak > 0 && r.length === maxWinStreak
+        : maxLossStreak > 0 && r.length === maxLossStreak;
+      return { ...r, x: xs[i], y, w: barW, h, d: barPath(xs[i], y, barW, h, up, radius), isRecord };
     });
   });
 
+  // Only the record streak(s) and the hovered bar keep their numeral once
+  // bars get thin enough to scroll -- a wall of "1"s otherwise drowns out
+  // the runs actually worth reading.
+  function showLabel(bar: Bar, i: number): boolean {
+    return hoveredIndex === i || bar.isRecord || !layout?.scrolling || bar.length >= 3;
+  }
+
   let hoveredIndex = $state<number | null>(null);
-  let box: HTMLDivElement | undefined = $state();
   let tooltipEl: HTMLDivElement | undefined = $state();
   let barEls: (SVGPathElement | undefined)[] = [];
 
@@ -97,7 +148,14 @@
     const boxRect = box.getBoundingClientRect();
     return { x: barRect.left + barRect.width / 2 - boxRect.left, y: barRect.top - boxRect.top - 8 };
   }
-  const tooltip = $derived(hoveredIndex === null ? null : tooltipPos(barEls[hoveredIndex]));
+  // hoveredIndex can briefly point past the end of a just-shrunk `runs`
+  // (filtering to a hovered bar's own range, a period/group-by change while
+  // hovering) -- runs[hoveredIndex] is checked directly rather than trusted
+  // to still exist, so a stale index degrades to "no tooltip" instead of a
+  // crash reading .start/.end off undefined.
+  const tooltip = $derived(
+    hoveredIndex === null || !runs[hoveredIndex] ? null : tooltipPos(barEls[hoveredIndex]),
+  );
 
   // Centered on the hovered bar by default (via the CSS translateX(-50%)),
   // which overflows the panel's own clipped bounds for a bar near either
@@ -124,8 +182,99 @@
   });
 
   function barOpacity(i: number): number {
-    return hoveredIndex === null || hoveredIndex === i ? 1 : 0.32;
+    if (hoveredIndex !== null) return hoveredIndex === i ? 1 : 0.32;
+    if (selectedIndex >= 0) return selectedIndex === i ? 1 : 0.32;
+    return 1;
   }
+
+  // ---- overview strip -- only shown once the chart is wide enough to
+  // scroll, so there's a way to tell there's more history off to the side
+  // and to jump straight to it. ----
+  const overviewBars = $derived.by(() => {
+    if (!runs.length) return null;
+    const n = runs.length;
+    const gap = 0.5;
+    const barW = Math.max(0.5, (availW - gap * (n - 1)) / n);
+    const zeroY = OVERVIEW_H * 0.55;
+    const upScale = (OVERVIEW_H * 0.45) / (maxWinStreak || 1);
+    const downScale = (OVERVIEW_H * 0.45) / (maxLossStreak || 1);
+    return runs.map((r, i) => {
+      const up = r.outcome === "win";
+      const h = Math.max(0.6, r.length * (up ? upScale : downScale));
+      const isRecord = up
+        ? maxWinStreak > 0 && r.length === maxWinStreak
+        : maxLossStreak > 0 && r.length === maxLossStreak;
+      return { x: i * (barW + gap), y: up ? zeroY - h : zeroY, w: barW, h, outcome: r.outcome, isRecord };
+    });
+  });
+
+  let viewStart = $state(0);
+  let viewFrac = $state(1);
+  function syncViewport() {
+    if (!scrollEl) return;
+    const sw = scrollEl.scrollWidth || 1;
+    viewStart = scrollEl.scrollLeft / sw;
+    viewFrac = Math.min(1, scrollEl.clientWidth / sw);
+  }
+
+  // Default to the tail of the history -- the current streak is the one
+  // thing you always want in view without having to scroll for it -- and
+  // re-anchor there whenever the run list itself changes (a new filter or
+  // group-by), not on every resize-driven layout recompute. Also drops any
+  // hover, since a stale index into the old (larger) `runs` would otherwise
+  // point at the wrong bar, or none at all, until the next mousemove.
+  $effect(() => {
+    runs;
+    hoveredIndex = null;
+    if (!scrollEl) return;
+    requestAnimationFrame(() => {
+      if (!scrollEl) return;
+      scrollEl.scrollLeft = scrollEl.scrollWidth;
+      syncViewport();
+    });
+  });
+
+  function jumpTo(e: MouseEvent) {
+    if (!scrollEl || !overviewEl) return;
+    const rect = overviewEl.getBoundingClientRect();
+    const frac = (e.clientX - rect.left) / rect.width;
+    scrollEl.scrollLeft = frac * scrollEl.scrollWidth - scrollEl.clientWidth / 2;
+    syncViewport();
+  }
+
+  // Dragging the viewport rectangle itself pans continuously instead of
+  // re-jumping on every pixel -- one overview-strip pixel of mouse travel
+  // maps to scrollWidth/availW main-chart pixels, since the strip
+  // compresses the whole scrollable width down to availW.
+  let draggingViewport = $state(false);
+  function startDrag(e: MouseEvent) {
+    e.stopPropagation();
+    if (!scrollEl) return;
+    draggingViewport = true;
+    const startX = e.clientX;
+    const startScrollLeft = scrollEl.scrollLeft;
+    const scale = scrollEl.scrollWidth / Math.max(1, availW);
+    const onMove = (ev: MouseEvent) => {
+      if (!scrollEl) return;
+      scrollEl.scrollLeft = startScrollLeft + (ev.clientX - startX) * scale;
+      syncViewport();
+    };
+    const onUp = () => {
+      draggingViewport = false;
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+  }
+
+  let hoveringViewport = $state(false);
+  const viewportLabel = $derived.by(() => {
+    if (!runs.length) return "";
+    const startIdx = Math.max(0, Math.min(runs.length - 1, Math.floor(viewStart * runs.length)));
+    const endIdx = Math.max(startIdx, Math.min(runs.length - 1, Math.ceil((viewStart + viewFrac) * runs.length) - 1));
+    return `${fmtDate(runs[startIdx].start)} – ${fmtDate(runs[endIdx].end)}`;
+  });
 </script>
 
 <div class="panel">
@@ -161,42 +310,56 @@
     <div class="empty">No closed positions in this view.</div>
   {:else}
     <div class="body">
-      <div class="bars-box" bind:this={box} onmouseleave={() => (hoveredIndex = null)}>
-        <svg class="bars-svg" viewBox="0 0 {CHART_W} {CHART_H}" preserveAspectRatio="xMidYMid meet">
-          {#each runs as r, i (i)}
-            <rect
-              class="hover-band"
-              class:active={hoveredIndex === i}
-              x={layout.xs[i] - GAP / 2}
-              y={0}
-              width={layout.barW + GAP}
-              height={CHART_H}
-              onmousemove={() => (hoveredIndex = i)}
-            />
-          {/each}
-          <line class="zero-line" x1={PAD_L} y1={layout.zeroY} x2={CHART_W - PAD_R} y2={layout.zeroY} />
-          {#each bars as bar, i (i)}
-            <path
-              class="bar-rect"
-              d={barPath(bar.x, bar.y, bar.w, bar.h, bar.outcome === "win", Math.min(3, bar.w / 2, bar.h))}
-              fill={bar.outcome === "win" ? "var(--up)" : "var(--dn)"}
-              style="opacity:{barOpacity(i)}"
-              bind:this={barEls[i]}
-            />
-            <text
-              class="bar-label"
-              x={bar.x + bar.w / 2}
-              y={bar.outcome === "win" ? bar.y - 4 : bar.y + bar.h + 9}
-              text-anchor="middle"
-            >
-              {bar.length}
+      <div class="bars-box" bind:this={box} bind:clientWidth={availW} onmouseleave={() => (hoveredIndex = null)}>
+        <div class="bars-scroll" bind:this={scrollEl} onscroll={syncViewport}>
+          <svg
+            class="bars-svg"
+            width={layout.contentW}
+            height={CHART_H}
+            viewBox="0 0 {layout.contentW} {CHART_H}"
+          >
+            {#each runs as r, i (i)}
+              <rect
+                class="hover-band"
+                class:active={hoveredIndex === i}
+                x={layout.xs[i] - GAP / 2}
+                y={0}
+                width={layout.barW + GAP}
+                height={CHART_H}
+                onmousemove={() => (hoveredIndex = i)}
+                onclick={() => selectRun(i)}
+              />
+            {/each}
+            <line class="zero-line" x1={PAD_L} y1={layout.zeroY} x2={layout.contentW - PAD_R} y2={layout.zeroY} />
+            {#each bars as bar, i (i)}
+              <path
+                class="bar-rect"
+                d={bar.d}
+                fill={bar.outcome === "win" ? "var(--up)" : "var(--dn)"}
+                style="opacity:{barOpacity(i)}"
+                bind:this={barEls[i]}
+              />
+              {#if i === selectedIndex}
+                <path class="bar-selected-ring" d={bar.d} stroke="var(--accent)" />
+              {/if}
+              {#if showLabel(bar, i)}
+                <text
+                  class="bar-label"
+                  class:record={bar.isRecord}
+                  x={bar.x + bar.w / 2}
+                  y={bar.outcome === "win" ? bar.y - 4 : bar.y + bar.h + 9}
+                  text-anchor="middle"
+                >
+                  {bar.length}
+                </text>
+              {/if}
+            {/each}
+            <text class="axis-caption" x={PAD_L} y={CHART_H - 4}>{fmtDate(runs[0].start)}</text>
+            <text class="axis-caption" x={layout.contentW - PAD_R} y={CHART_H - 4} text-anchor="end">
+              {fmtDate(runs[runs.length - 1].end)}
             </text>
-          {/each}
-          <text class="axis-caption" x={PAD_L} y={CHART_H - 4}>{fmtDate(runs[0].start)}</text>
-          <text class="axis-caption" x={CHART_W - PAD_R} y={CHART_H - 4} text-anchor="end">
-            {fmtDate(runs[runs.length - 1].end)}
-          </text>
-        </svg>
+          </svg>
+        </div>
         {#if hoveredIndex !== null && tooltip}
           {@const r = runs[hoveredIndex]}
           <div
@@ -212,13 +375,57 @@
               {fmtDateFull(r.start)}{r.start !== r.end ? ` – ${fmtDateFull(r.end)}` : ""}
             </div>
             <div class="t-sub total {toneOf(r.total)}">{fmtMoney(r.total, currency)} total</div>
+            {#if onSelectRun}
+              <div class="t-hint">
+                {hoveredIndex === selectedIndex ? "Click to clear this filter" : "Click to filter Positions to this range"}
+              </div>
+            {/if}
           </div>
         {/if}
       </div>
+      {#if layout.scrolling && overviewBars}
+        {@const vpX = viewStart * availW}
+        {@const vpW = Math.max(2, viewFrac * availW)}
+        <div class="overview" bind:this={overviewEl} onmousedown={jumpTo} title="Click to jump, or drag the highlighted range">
+          <svg class="overview-svg" width={availW} height={OVERVIEW_H} viewBox="0 0 {availW} {OVERVIEW_H}">
+            {#each overviewBars as ob, i (i)}
+              <rect
+                x={ob.x}
+                y={ob.y}
+                width={ob.w}
+                height={ob.h}
+                fill={ob.outcome === "win" ? "var(--up)" : "var(--dn)"}
+                opacity={ob.isRecord ? 1 : 0.5}
+              />
+            {/each}
+            <rect
+              class="viewport-rect"
+              class:dragging={draggingViewport}
+              x={vpX}
+              y="0"
+              width={vpW}
+              height={OVERVIEW_H}
+              onmousedown={startDrag}
+              onmouseenter={() => (hoveringViewport = true)}
+              onmouseleave={() => (hoveringViewport = false)}
+            />
+            {#if draggingViewport || hoveringViewport}
+              <rect class="viewport-handle" x={vpX + 2} y={OVERVIEW_H / 2 - 5} width="2" height="10" rx="1" />
+              <rect class="viewport-handle" x={vpX + vpW - 4} y={OVERVIEW_H / 2 - 5} width="2" height="10" rx="1" />
+            {/if}
+          </svg>
+          {#if draggingViewport || hoveringViewport}
+            <div class="viewport-tooltip" style="left:{vpX + vpW / 2}px">{viewportLabel}</div>
+          {/if}
+        </div>
+      {/if}
       <div class="legend-row">
         <div class="legend-item"><span class="legend-dot" style="background:var(--up)"></span>Win streak</div>
         <div class="legend-item"><span class="legend-dot" style="background:var(--dn)"></span>Loss streak</div>
-        <div class="legend-item muted">Hover a bar for its dates, length &amp; total P&amp;L</div>
+        <div class="legend-item muted">
+          {layout.scrolling ? "Scroll or click the strip above to explore history · hover" : "Hover"} a bar for its dates,
+          length &amp; total P&amp;L
+        </div>
       </div>
     </div>
   {/if}
@@ -294,14 +501,28 @@
   .bars-box {
     position: relative;
   }
+  .bars-scroll {
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+  }
+  .bars-scroll::-webkit-scrollbar {
+    height: 6px;
+  }
+  .bars-scroll::-webkit-scrollbar-thumb {
+    background: var(--border-12);
+    border-radius: 3px;
+  }
   .bars-svg {
-    width: 100%;
-    height: auto;
     display: block;
-    overflow: visible;
   }
   .bar-rect {
     transition: opacity 0.12s;
+    pointer-events: none;
+  }
+  .bar-selected-ring {
+    fill: none;
+    stroke-width: 1.6;
     pointer-events: none;
   }
   .hover-band {
@@ -317,15 +538,58 @@
     stroke-width: 1;
   }
   .bar-label {
-    font-size: 7px;
+    font-size: 10px;
     font-weight: var(--weight-bold);
     font-variant-numeric: tabular-nums;
     fill: var(--text);
   }
+  .bar-label.record {
+    font-size: 11px;
+  }
   .axis-caption {
-    font-size: 9px;
+    font-size: 12px;
     font-weight: var(--weight-medium);
     fill: var(--dim-45);
+  }
+
+  .overview {
+    position: relative;
+    margin-top: 8px;
+    border-radius: 4px;
+    background: var(--surface-alt);
+    cursor: pointer;
+  }
+  .overview-svg {
+    display: block;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .viewport-rect {
+    fill: var(--accent-bg);
+    stroke: var(--accent);
+    stroke-width: 1;
+    cursor: grab;
+  }
+  .viewport-rect.dragging {
+    cursor: grabbing;
+  }
+  .viewport-handle {
+    fill: var(--accent);
+    pointer-events: none;
+  }
+  .viewport-tooltip {
+    position: absolute;
+    bottom: calc(100% + 6px);
+    transform: translateX(-50%);
+    background: var(--text);
+    color: var(--surface);
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-semibold);
+    padding: 4px 8px;
+    border-radius: var(--radius-md);
+    white-space: nowrap;
+    pointer-events: none;
+    z-index: 5;
   }
 
   .tooltip {
@@ -368,6 +632,14 @@
   }
   .tooltip .t-sub.total.neg {
     color: var(--dn);
+  }
+  .tooltip .t-hint {
+    color: var(--accent);
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-semibold);
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--accent-bg);
   }
 
   .legend-row {
