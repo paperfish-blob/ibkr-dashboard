@@ -47,8 +47,16 @@
   // check would miss it.
   function handleReset(url: URL) {
     if (url.searchParams.get("reset") !== "1") return;
-    setPeriod("all");
-    posGroupBy.set("exit");
+    // The current year, not "All" -- this page's own charts (cumulative
+    // P&L, the Monthly panel) are dense enough over a full multi-year
+    // history that starting scoped to what's actually still in progress
+    // reads better than starting on everything at once.
+    setPeriod(String(new Date().getFullYear()));
+    // Entry date, not exit -- unlike the Positions page (which defaults to
+    // exit, matching money actually realized that day), this page's own
+    // chart/table already reads better bucketed by when a position was
+    // opened, so that's the view arriving here should always start on.
+    posGroupBy.set("entry");
     monthlyPnlView.set("charts");
     // Nothing else rewrites this page's URL, so `reset=1` would otherwise
     // sit in the address bar forever -- unlike Transactions/Positions,
@@ -61,8 +69,8 @@
   });
 
   const GROUP_BY = [
-    { label: "Exit date", value: "exit" },
     { label: "Entry date", value: "entry" },
+    { label: "Exit date", value: "exit" },
   ];
 
   let hoveredMonth = $state<string | null>(null);

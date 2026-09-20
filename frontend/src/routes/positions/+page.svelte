@@ -7,6 +7,7 @@
   import SegToggle from "$lib/components/SegToggle.svelte";
   import SymbolFilter from "$lib/components/SymbolFilter.svelte";
   import AdvancedFilters from "$lib/components/AdvancedFilters.svelte";
+  import StreakFlow, { type StreakRun } from "$lib/components/StreakFlow.svelte";
   import PositionsTable from "$lib/components/PositionsTable.svelte";
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
   import AlertBar from "$lib/components/AlertBar.svelte";
@@ -228,6 +229,47 @@
     filtered.reduce((sum, p) => sum + (p.realized_pnl === null ? 0 : num(p.realized_pnl)), 0),
   );
 
+  // Consecutive-outcome runs across whatever's currently filtered (Symbol,
+  // Side, Date range, Category, Carry-in -- posFilter too, so "Open only"
+  // correctly shows no runs rather than a stale one, since an open position
+  // has no outcome yet to extend or break a streak), walked in the same
+  // chronological order (and same same-day tiebreak) as buildStreaks on
+  // the Positions Overview page's Monthly panel -- except every run
+  // becomes its own bar here instead of only the month's biggest surviving.
+  // A flat ($0) position breaks a streak without starting a new one.
+  function buildStreakRuns(all: Position[], groupBy: PosGroupBy): StreakRun[] {
+    const dateOf = groupBy === "exit" ? (p: Position) => p.exit_date : (p: Position) => p.open_date;
+    const timeOf =
+      groupBy === "exit"
+        ? (p: Position) => p.exit_legs[p.exit_legs.length - 1]?.trade_time ?? ""
+        : (p: Position) => p.open_time;
+
+    const dated = all
+      .filter((p) => !p.is_open && p.realized_pnl !== null)
+      .map((p) => ({ date: dateOf(p), time: timeOf(p), pnl: num(p.realized_pnl) }))
+      .filter((x): x is { date: string; time: string; pnl: number } => x.date !== null && x.pnl !== 0)
+      .sort((a, b) => {
+        if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+        return a.time < b.time ? -1 : a.time > b.time ? 1 : 0;
+      });
+
+    const runs: StreakRun[] = [];
+    for (const { date, pnl } of dated) {
+      const outcome = pnl > 0 ? "win" : "loss";
+      const last = runs[runs.length - 1];
+      if (last && last.outcome === outcome) {
+        last.length += 1;
+        last.end = date;
+        last.total += pnl;
+      } else {
+        runs.push({ outcome, length: 1, start: date, end: date, total: pnl });
+      }
+    }
+    return runs;
+  }
+
+  const streakRuns = $derived(buildStreakRuns(filtered, $posGroupBy));
+
   async function handleRefresh() {
     refreshing = true;
     try {
@@ -318,6 +360,8 @@
   {#if $positionsLoading && !$positions}
     <SkeletonCard height={480} rows={8} />
   {:else if $positions}
+    <StreakFlow runs={streakRuns} {currency} />
+    <div class="gap"></div>
     <PositionsTable positions={filtered} {currency} groupBy={$posGroupBy} />
   {:else}
     <div class="panel-empty">
@@ -330,6 +374,9 @@
   .page {
     padding: var(--page-py) var(--page-px);
     width: 100%;
+  }
+  .gap {
+    height: 24px;
   }
   .total {
     font-size: var(--text-2lg);
