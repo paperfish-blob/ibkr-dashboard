@@ -7,6 +7,7 @@
   import SegToggle from "$lib/components/SegToggle.svelte";
   import SymbolFilter from "$lib/components/SymbolFilter.svelte";
   import MonthFilter from "$lib/components/MonthFilter.svelte";
+  import AdvancedFilters from "$lib/components/AdvancedFilters.svelte";
   import PositionsTable from "$lib/components/PositionsTable.svelte";
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
   import AlertBar from "$lib/components/AlertBar.svelte";
@@ -25,6 +26,10 @@
     posMonths,
     posCarryInOnly,
     posGroupBy,
+    posSide,
+    posDateFrom,
+    posDateTo,
+    posAssetCategories,
     type PosFilter,
     type PosGroupBy,
   } from "$lib/stores";
@@ -38,6 +43,24 @@
   // this can't loop with it.
   if (browser) {
     const qs = page.url.searchParams;
+
+    // The top-nav link into this page carries this to land on a clean
+    // view (closed positions, grouped by entry date) regardless of
+    // whatever filters were left set from a previous visit -- everything
+    // resets first, then the per-field checks below apply this URL's own
+    // values (filter=closed&groupBy=entry) on top, same as any deep link.
+    if (qs.get("reset") === "1") {
+      setPeriod("all");
+      posFilter.set("all");
+      posSymbols.set([]);
+      posMonths.set([]);
+      posCarryInOnly.set(false);
+      posGroupBy.set("exit");
+      posSide.set("all");
+      posDateFrom.set(null);
+      posDateTo.set(null);
+      posAssetCategories.set([]);
+    }
 
     const year = qs.get("year");
     if (year && /^(all|\d{4})$/.test(year)) setPeriod(year);
@@ -55,16 +78,41 @@
 
     const groupBy = qs.get("groupBy");
     if (groupBy === "exit" || groupBy === "entry") posGroupBy.set(groupBy);
+
+    const side = qs.get("side");
+    if (side === "all" || side === "long" || side === "short") posSide.set(side);
+
+    const dateFrom = qs.get("dateFrom");
+    if (dateFrom && /^\d{4}-\d{2}-\d{2}$/.test(dateFrom)) posDateFrom.set(dateFrom);
+
+    const dateTo = qs.get("dateTo");
+    if (dateTo && /^\d{4}-\d{2}-\d{2}$/.test(dateTo)) posDateTo.set(dateTo);
+
+    const assetCat = qs.get("assetCat");
+    if (assetCat) posAssetCategories.set(assetCat.split(",").filter(Boolean));
   }
 
-  // A month outside the active year can never match a position -- same fix
-  // as the Transactions page's own txMonths/period reconciliation. Runs
-  // once more after its own posMonths.set() with kept.length unchanged, so
-  // it settles rather than looping.
+  // A month (or a date range) outside the active year can never match a
+  // position -- same fix as the Transactions page's own txMonths/period
+  // reconciliation, now extended to the date-range filter alongside it.
+  // Runs once more after its own .set() calls with nothing left to change,
+  // so it settles rather than looping.
   $effect(() => {
     if ($period === "all") return;
     const kept = $posMonths.filter((m) => m.startsWith(`${$period}-`));
     if (kept.length !== $posMonths.length) posMonths.set(kept);
+
+    const yearStart = `${$period}-01-01`;
+    const yearEnd = `${$period}-12-31`;
+    // Entirely outside the new year -- nothing left to clip to, so clear
+    // both ends rather than collapse them onto one meaningless boundary.
+    if (($posDateTo && $posDateTo < yearStart) || ($posDateFrom && $posDateFrom > yearEnd)) {
+      if ($posDateFrom !== null) posDateFrom.set(null);
+      if ($posDateTo !== null) posDateTo.set(null);
+    } else {
+      if ($posDateFrom && $posDateFrom < yearStart) posDateFrom.set(yearStart);
+      if ($posDateTo && $posDateTo > yearEnd) posDateTo.set(yearEnd);
+    }
   });
 
   // Keep the URL in sync with the filters, one-way (store -> URL). Only
@@ -78,6 +126,10 @@
     if ($posMonths.length > 0) parts.push(`months=${$posMonths.join(",")}`);
     if ($posCarryInOnly) parts.push("carryIn=1");
     if ($posGroupBy !== "exit") parts.push(`groupBy=${$posGroupBy}`);
+    if ($posSide !== "all") parts.push(`side=${$posSide}`);
+    if ($posDateFrom) parts.push(`dateFrom=${$posDateFrom}`);
+    if ($posDateTo) parts.push(`dateTo=${$posDateTo}`);
+    if ($posAssetCategories.length > 0) parts.push(`assetCat=${$posAssetCategories.join(",")}`);
 
     const qs = parts.join("&");
     goto(qs ? `/positions?${qs}` : "/positions", {
@@ -111,11 +163,30 @@
 
   const carryInCount = $derived(($positions?.positions ?? []).filter((p) => p.is_carry_in).length);
 
+  const categoryCounts = $derived.by(() => {
+    const m = new Map<string, number>();
+    for (const p of $positions?.positions ?? []) m.set(p.asset_category, (m.get(p.asset_category) ?? 0) + 1);
+    return m;
+  });
+
   // Keyed off whichever date posGroupBy currently keys the table's day bands
   // off -- a position without that date (a still-open position under "exit",
   // a carry-in under "entry") has no month to count toward.
   function groupDate(p: Position): string | null {
     return $posGroupBy === "exit" ? p.exit_date : p.open_date;
+  }
+
+  // Keeps a manually-picked date inside whichever year is currently
+  // selected -- the reconciling $effect above only reacts to $period
+  // itself changing, so a date typed in while a specific year is already
+  // active needs this instead to land inside it right away.
+  function clipToPeriod(d: string | null): string | null {
+    if (!d || $period === "all") return d;
+    const yearStart = `${$period}-01-01`;
+    const yearEnd = `${$period}-12-31`;
+    if (d < yearStart) return yearStart;
+    if (d > yearEnd) return yearEnd;
+    return d;
   }
   const monthCounts = $derived.by(() => {
     const m = new Map<string, number>();
@@ -144,7 +215,21 @@
           return d !== null && $posMonths.includes(d.slice(0, 7));
         })
       : bySymbol;
-    return $posCarryInOnly ? byMonth.filter((p) => p.is_carry_in) : byMonth;
+    const byDateRange =
+      $posDateFrom || $posDateTo
+        ? byMonth.filter((p) => {
+            const d = groupDate(p);
+            if (d === null) return false;
+            if ($posDateFrom && d < $posDateFrom) return false;
+            if ($posDateTo && d > $posDateTo) return false;
+            return true;
+          })
+        : byMonth;
+    const bySide = $posSide === "all" ? byDateRange : byDateRange.filter((p) => p.direction === $posSide);
+    const byCategory = $posAssetCategories.length
+      ? bySide.filter((p) => $posAssetCategories.includes(p.asset_category))
+      : bySide;
+    return $posCarryInOnly ? byCategory.filter((p) => p.is_carry_in) : byCategory;
   });
 
   const total = $derived(
@@ -203,10 +288,37 @@
         <MonthFilter
           counts={monthCounts}
           active={$posMonths}
-          onChange={(next) => posMonths.set(next)}
+          onChange={(next) => {
+            posMonths.set(next);
+            // Month and date-range pick the same underlying thing (which
+            // dates count) at two different granularities -- keeping both
+            // active would silently AND them into whatever sliver
+            // overlaps, so picking one clears the other instead.
+            if (next.length > 0) {
+              posDateFrom.set(null);
+              posDateTo.set(null);
+            }
+          }}
         />
       </div>
       <div class="toolbar-right">
+        <AdvancedFilters
+          dateFrom={$posDateFrom}
+          dateTo={$posDateTo}
+          onDateChange={(from, to) => {
+            const clippedFrom = clipToPeriod(from);
+            const clippedTo = clipToPeriod(to);
+            posDateFrom.set(clippedFrom);
+            posDateTo.set(clippedTo);
+            if (clippedFrom || clippedTo) posMonths.set([]);
+          }}
+          side={$posSide}
+          onSideChange={(v) => posSide.set(v)}
+          categories={categoryCounts}
+          activeCategories={$posAssetCategories}
+          onCategoriesChange={(next) => posAssetCategories.set(next)}
+          matchCount={filtered.length}
+        />
         {#if carryInCount > 0}
           <button
             class="carry-toggle"

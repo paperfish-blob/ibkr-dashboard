@@ -5,11 +5,14 @@
   let { children } = $props();
 
   const nav = [
-    { href: "/", label: "Overview" },
-    { href: "/transactions", label: "Transactions" },
-    { href: "/positions/overview", label: "Positions Overview" },
-    { href: "/positions", label: "Positions" },
-    { href: "/history", label: "History" },
+    { href: "/", path: "/", label: "Overview" },
+    { href: "/transactions", path: "/transactions", label: "Transactions" },
+    { href: "/positions/overview", path: "/positions/overview", label: "Positions Overview" },
+    // Reset every other Positions filter on the way in from the nav --
+    // closed positions, grouped by entry date, is the default view this
+    // link should always land on, not whatever filters were last left set.
+    { href: "/positions?filter=closed&groupBy=entry&reset=1", path: "/positions", label: "Positions" },
+    { href: "/history", path: "/history", label: "History" },
   ];
 
   const current = $derived($page.url.pathname);
@@ -20,23 +23,23 @@
     <a href="/" class="brand">IBKR&nbsp;·&nbsp;Realized P&amp;L</a>
     <nav class="nav">
       {#each nav as item (item.href)}
-        <a href={item.href} class:active={current === item.href}>
+        <a href={item.href} class:active={current === item.path}>
           <span class="nav-link">
-            {#if item.href === "/"}
+            {#if item.path === "/"}
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M2 12l4-5 3 3 5-6" />
                 <path d="M2 14h12" />
               </svg>
-            {:else if item.href === "/transactions"}
+            {:else if item.path === "/transactions"}
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M2 4h12M2 8h12M2 12h8" />
               </svg>
-            {:else if item.href === "/positions"}
+            {:else if item.path === "/positions"}
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M3 3v10h10" />
                 <path d="M5.5 10.5l2.5-3 2 2 2.5-3.5" />
               </svg>
-            {:else if item.href === "/positions/overview"}
+            {:else if item.path === "/positions/overview"}
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M3 3v10h10" />
                 <circle cx="6" cy="10" r="1.3" />

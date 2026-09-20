@@ -128,6 +128,22 @@ export const posMonths = persisted<string[]>("ibkr.pos.months", []);
  *  carry-in can be either open or closed. Off by default. */
 export const posCarryInOnly = persisted<boolean>("ibkr.pos.carryInOnly", false);
 
+export type PosSide = "all" | "long" | "short";
+
+/** Direction filter for the Positions page, same multi-value convention as
+ *  posFilter. */
+export const posSide = persisted<PosSide>("ibkr.pos.side", "all");
+
+/** Date-range filter for the Positions page, as "YYYY-MM-DD" strings (or
+ *  null for an open end) -- applied against whichever date posGroupBy
+ *  currently keys off, same as posMonths. */
+export const posDateFrom = persisted<string | null>("ibkr.pos.dateFrom", null);
+export const posDateTo = persisted<string | null>("ibkr.pos.dateTo", null);
+
+/** Asset-category filter (e.g. "STK", "CFD"), same multi-select convention
+ *  as posSymbols -- empty means every category. */
+export const posAssetCategories = persisted<string[]>("ibkr.pos.assetCategories", []);
+
 export type PosGroupBy = "exit" | "entry";
 
 /** Which date the Positions table's day bands key off. "exit" matches money
