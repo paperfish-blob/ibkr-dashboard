@@ -1,12 +1,11 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { browser } from "$app/environment";
-  import { goto } from "$app/navigation";
+  import { goto, afterNavigate } from "$app/navigation";
   import { page } from "$app/state";
   import PageHeader from "$lib/components/PageHeader.svelte";
   import SegToggle from "$lib/components/SegToggle.svelte";
   import SymbolFilter from "$lib/components/SymbolFilter.svelte";
-  import MonthFilter from "$lib/components/MonthFilter.svelte";
   import AdvancedFilters from "$lib/components/AdvancedFilters.svelte";
   import PositionsTable from "$lib/components/PositionsTable.svelte";
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
@@ -23,7 +22,6 @@
     setPeriod,
     posFilter,
     posSymbols,
-    posMonths,
     posCarryInOnly,
     posGroupBy,
     posSide,
@@ -37,31 +35,10 @@
   const POLL_MS = 30_000;
   let refreshing = $state(false);
 
-  // Seed filters from the URL once, on load. Anything absent or invalid
-  // leaves the store at whatever persisted() already restored from
-  // localStorage. The sync effect below never reads the URL back, so
-  // this can't loop with it.
-  if (browser) {
-    const qs = page.url.searchParams;
-
-    // The top-nav link into this page carries this to land on a clean
-    // view (closed positions, grouped by entry date) regardless of
-    // whatever filters were left set from a previous visit -- everything
-    // resets first, then the per-field checks below apply this URL's own
-    // values (filter=closed&groupBy=entry) on top, same as any deep link.
-    if (qs.get("reset") === "1") {
-      setPeriod("all");
-      posFilter.set("all");
-      posSymbols.set([]);
-      posMonths.set([]);
-      posCarryInOnly.set(false);
-      posGroupBy.set("exit");
-      posSide.set("all");
-      posDateFrom.set(null);
-      posDateTo.set(null);
-      posAssetCategories.set([]);
-    }
-
+  // Every field a URL can seed onto this page's filters, applied on top of
+  // whatever's already there -- absent or invalid leaves a store at
+  // whatever persisted() already restored from localStorage.
+  function applyFiltersFromUrl(qs: URLSearchParams) {
     const year = qs.get("year");
     if (year && /^(all|\d{4})$/.test(year)) setPeriod(year);
 
@@ -70,9 +47,6 @@
 
     const symbols = qs.get("symbols");
     if (symbols) posSymbols.set(symbols.split(",").filter(Boolean));
-
-    const months = qs.get("months");
-    if (months) posMonths.set(months.split(",").filter(Boolean));
 
     if (qs.get("carryIn") === "1") posCarryInOnly.set(true);
 
@@ -92,16 +66,51 @@
     if (assetCat) posAssetCategories.set(assetCat.split(",").filter(Boolean));
   }
 
-  // A month (or a date range) outside the active year can never match a
-  // position -- same fix as the Transactions page's own txMonths/period
-  // reconciliation, now extended to the date-range filter alongside it.
-  // Runs once more after its own .set() calls with nothing left to change,
-  // so it settles rather than looping.
+  function resetAllFilters() {
+    setPeriod("all");
+    posFilter.set("all");
+    posSymbols.set([]);
+    posCarryInOnly.set(false);
+    posGroupBy.set("exit");
+    posSide.set("all");
+    posDateFrom.set(null);
+    posDateTo.set(null);
+    posAssetCategories.set([]);
+  }
+
+  // Seed filters from the URL once, on load. The sync effect below never
+  // reads the URL back, so this can't loop with it.
+  if (browser) {
+    const qs = page.url.searchParams;
+    if (qs.get("reset") === "1") resetAllFilters();
+    applyFiltersFromUrl(qs);
+  }
+
+  // The block above only runs once, when this component is first created --
+  // but the top-nav link into this page (which carries `reset=1` to land on
+  // a clean view regardless of whatever filters were left set) is a link to
+  // this same route, so clicking it while already on /positions is a
+  // same-route navigation that SvelteKit serves by reusing this exact
+  // component instance rather than remounting it. afterNavigate fires on
+  // every navigation that lands here, mount included, so it catches that
+  // case too -- gated on `reset` so it's a no-op for the sync effect's own
+  // goto() calls below, which never set it.
+  afterNavigate(({ to }) => {
+    const qs = to?.url.searchParams;
+    if (qs?.get("reset") === "1") {
+      resetAllFilters();
+      applyFiltersFromUrl(qs);
+    }
+  });
+
+  // A date range outside the active year can never match a position --
+  // same fix as the Transactions page's own txMonths/period reconciliation
+  // used to apply to months here too, before "which dates" collapsed onto
+  // this one range instead of two overlapping filters. Runs once more
+  // after its own .set() calls with nothing left to change, so it settles
+  // rather than looping.
   $effect(() => {
     if ($period === "all") return;
-    const kept = $posMonths.filter((m) => m.startsWith(`${$period}-`));
-    if (kept.length !== $posMonths.length) posMonths.set(kept);
-
     const yearStart = `${$period}-01-01`;
     const yearEnd = `${$period}-12-31`;
     // Entirely outside the new year -- nothing left to clip to, so clear
@@ -123,7 +132,6 @@
     if ($period !== "all") parts.push(`year=${$period}`);
     if ($posFilter !== "all") parts.push(`filter=${$posFilter}`);
     if ($posSymbols.length > 0) parts.push(`symbols=${$posSymbols.join(",")}`);
-    if ($posMonths.length > 0) parts.push(`months=${$posMonths.join(",")}`);
     if ($posCarryInOnly) parts.push("carryIn=1");
     if ($posGroupBy !== "exit") parts.push(`groupBy=${$posGroupBy}`);
     if ($posSide !== "all") parts.push(`side=${$posSide}`);
@@ -188,16 +196,6 @@
     if (d > yearEnd) return yearEnd;
     return d;
   }
-  const monthCounts = $derived.by(() => {
-    const m = new Map<string, number>();
-    for (const p of $positions?.positions ?? []) {
-      const d = groupDate(p);
-      if (!d) continue;
-      const key = d.slice(0, 7);
-      m.set(key, (m.get(key) ?? 0) + 1);
-    }
-    return m;
-  });
 
   const filtered = $derived.by(() => {
     const all = $positions?.positions ?? [];
@@ -209,22 +207,16 @@
     const bySymbol = $posSymbols.length
       ? byStatus.filter((p) => $posSymbols.includes(p.symbol))
       : byStatus;
-    const byMonth = $posMonths.length
-      ? bySymbol.filter((p) => {
-          const d = groupDate(p);
-          return d !== null && $posMonths.includes(d.slice(0, 7));
-        })
-      : bySymbol;
     const byDateRange =
       $posDateFrom || $posDateTo
-        ? byMonth.filter((p) => {
+        ? bySymbol.filter((p) => {
             const d = groupDate(p);
             if (d === null) return false;
             if ($posDateFrom && d < $posDateFrom) return false;
             if ($posDateTo && d > $posDateTo) return false;
             return true;
           })
-        : byMonth;
+        : bySymbol;
     const bySide = $posSide === "all" ? byDateRange : byDateRange.filter((p) => p.direction === $posSide);
     const byCategory = $posAssetCategories.length
       ? bySide.filter((p) => $posAssetCategories.includes(p.asset_category))
@@ -285,32 +277,14 @@
           active={$posSymbols}
           onChange={(next) => posSymbols.set(next)}
         />
-        <MonthFilter
-          counts={monthCounts}
-          active={$posMonths}
-          onChange={(next) => {
-            posMonths.set(next);
-            // Month and date-range pick the same underlying thing (which
-            // dates count) at two different granularities -- keeping both
-            // active would silently AND them into whatever sliver
-            // overlaps, so picking one clears the other instead.
-            if (next.length > 0) {
-              posDateFrom.set(null);
-              posDateTo.set(null);
-            }
-          }}
-        />
       </div>
       <div class="toolbar-right">
         <AdvancedFilters
           dateFrom={$posDateFrom}
           dateTo={$posDateTo}
           onDateChange={(from, to) => {
-            const clippedFrom = clipToPeriod(from);
-            const clippedTo = clipToPeriod(to);
-            posDateFrom.set(clippedFrom);
-            posDateTo.set(clippedTo);
-            if (clippedFrom || clippedTo) posMonths.set([]);
+            posDateFrom.set(clipToPeriod(from));
+            posDateTo.set(clipToPeriod(to));
           }}
           side={$posSide}
           onSideChange={(v) => posSide.set(v)}

@@ -10,6 +10,9 @@
    * realized to bucket yet), same as PositionHeadlineStat's total.
    */
   import { onMount } from "svelte";
+  import { browser } from "$app/environment";
+  import { afterNavigate, goto } from "$app/navigation";
+  import { page } from "$app/state";
   import PageHeader from "$lib/components/PageHeader.svelte";
   import SegToggle from "$lib/components/SegToggle.svelte";
   import PositionHeadlineStat from "$lib/components/PositionHeadlineStat.svelte";
@@ -26,6 +29,7 @@
     positionsLoading,
     positionsError,
     refreshPositions,
+    setPeriod,
     posGroupBy,
     type PosGroupBy,
     monthlyPnlView,
@@ -34,6 +38,27 @@
 
   const POLL_MS = 30_000;
   let refreshing = $state(false);
+
+  // The top-nav "Positions Overview" link carries this to land on a clean
+  // view -- same idea as the Positions page's own nav-reset. Handled both
+  // at mount and via afterNavigate: a click while already on this page is
+  // a same-route navigation, which SvelteKit serves by reusing this
+  // component instance rather than remounting it, so a plain one-time
+  // check would miss it.
+  function handleReset(url: URL) {
+    if (url.searchParams.get("reset") !== "1") return;
+    setPeriod("all");
+    posGroupBy.set("exit");
+    monthlyPnlView.set("charts");
+    // Nothing else rewrites this page's URL, so `reset=1` would otherwise
+    // sit in the address bar forever -- unlike Transactions/Positions,
+    // which already have a store->URL sync effect that naturally drops it.
+    goto("/positions/overview", { replaceState: true, noScroll: true, keepFocus: true });
+  }
+  if (browser) handleReset(page.url);
+  afterNavigate(({ to }) => {
+    if (to) handleReset(to.url);
+  });
 
   const GROUP_BY = [
     { label: "Exit date", value: "exit" },
@@ -175,10 +200,15 @@
   // A clicked month drills into the Positions page instead of Transactions --
   // these months are round-trips, not executions -- filtered to that month
   // under the same groupBy dimension its own bucket was built from, and to
-  // closed positions only, matching what's actually pictured here.
+  // closed positions only, matching what's actually pictured here. As a
+  // date range rather than Positions' old separate month filter, so there's
+  // exactly one "which dates" mechanism to land on over there.
   function positionsMonthLink(key: string): string {
-    const year = key.slice(0, 4);
-    return `/positions?year=${year}&filter=closed&months=${key}&groupBy=${$posGroupBy}`;
+    const [y, m] = key.split("-").map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    const dateFrom = `${key}-01`;
+    const dateTo = `${key}-${String(lastDay).padStart(2, "0")}`;
+    return `/positions?year=${y}&filter=closed&dateFrom=${dateFrom}&dateTo=${dateTo}&groupBy=${$posGroupBy}`;
   }
 
   async function handleRefresh() {

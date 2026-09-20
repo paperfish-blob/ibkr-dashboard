@@ -1,5 +1,8 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { browser } from "$app/environment";
+  import { afterNavigate, goto } from "$app/navigation";
+  import { page } from "$app/state";
   import PageHeader from "$lib/components/PageHeader.svelte";
   import HeadlineStat from "$lib/components/HeadlineStat.svelte";
   import CumulativeChart from "$lib/components/CumulativeChart.svelte";
@@ -10,10 +13,31 @@
   import AlertBar from "$lib/components/AlertBar.svelte";
   import PeriodPicker from "$lib/components/PeriodPicker.svelte";
   import { api, type OHLCVBar } from "$lib/api";
-  import { pnl, pnlLoading, pnlError, refreshPnL, monthlyPnlView, type MonthlyPnlView } from "$lib/stores";
+  import { pnl, pnlLoading, pnlError, refreshPnL, setPeriod, monthlyPnlView, type MonthlyPnlView } from "$lib/stores";
 
   const POLL_MS = 30_000;
   let refreshing = $state(false);
+
+  // The top-nav "Overview" link carries this to land on a clean view --
+  // same idea as the Positions page's own nav-reset, since $period is
+  // shared across every page and would otherwise carry over whatever year
+  // was last selected elsewhere. Handled both at mount and via
+  // afterNavigate: a click while already on "/" is a same-route
+  // navigation, which SvelteKit serves by reusing this component instance
+  // rather than remounting it, so a plain one-time check would miss it.
+  function handleReset(url: URL) {
+    if (url.searchParams.get("reset") !== "1") return;
+    setPeriod("all");
+    monthlyPnlView.set("charts");
+    // Nothing else rewrites this page's URL, so `reset=1` would otherwise
+    // sit in the address bar forever -- unlike Transactions/Positions,
+    // which already have a store->URL sync effect that naturally drops it.
+    goto("/", { replaceState: true, noScroll: true, keepFocus: true });
+  }
+  if (browser) handleReset(page.url);
+  afterNavigate(({ to }) => {
+    if (to) handleReset(to.url);
+  });
 
   // Month hovered in MonthlyPnL, synced to IndexBenchmark's own chart so a
   // month highlighted in one highlights in both.

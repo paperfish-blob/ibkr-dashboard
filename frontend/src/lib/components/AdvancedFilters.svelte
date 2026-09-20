@@ -2,10 +2,12 @@
   /**
    * Consolidated "Filters" popover for the Positions page -- date range,
    * side (long/short), and asset category together behind one pill with a
-   * count badge, rather than each as its own toolbar control. Symbol and
-   * Month stay as their own SymbolFilter/MonthFilter pills since those are
-   * the two people reach for constantly; these three are reached for less
-   * often and would otherwise crowd the toolbar.
+   * count badge, rather than each as its own toolbar control. Symbol stays
+   * as its own SymbolFilter pill since that's the one people reach for
+   * constantly; these three are reached for less often and would otherwise
+   * crowd the toolbar. There's no separate month filter -- a month is just
+   * a date range, so "which dates" has exactly one home: this popover's
+   * own date range section.
    */
   import type { PosSide } from "$lib/stores";
 

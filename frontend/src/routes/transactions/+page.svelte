@@ -1,7 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
   import { browser } from "$app/environment";
-  import { goto } from "$app/navigation";
+  import { goto, afterNavigate } from "$app/navigation";
   import { page } from "$app/state";
   import PageHeader from "$lib/components/PageHeader.svelte";
   import SegToggle from "$lib/components/SegToggle.svelte";
@@ -29,13 +29,10 @@
   const POLL_MS = 30_000;
   let refreshing = $state(false);
 
-  // Seed filters from the URL once, on load. Anything absent or invalid
-  // leaves the store at whatever persisted() already restored from
-  // localStorage. The sync effect below never reads the URL back, so
-  // this can't loop with it.
-  if (browser) {
-    const qs = page.url.searchParams;
-
+  // Every field a URL can seed onto this page's filters, applied on top of
+  // whatever's already there -- absent or invalid leaves a store at
+  // whatever persisted() already restored from localStorage.
+  function applyFiltersFromUrl(qs: URLSearchParams) {
     const year = qs.get("year");
     if (year && /^(all|\d{4})$/.test(year)) setPeriod(year);
 
@@ -50,6 +47,39 @@
 
     if (qs.get("group") === "1") txGroupFills.set(true);
   }
+
+  function resetAllFilters() {
+    setPeriod("all");
+    txFilter.set("all");
+    txSymbols.set([]);
+    txMonths.set([]);
+    txGroupFills.set(false);
+  }
+
+  // Seed filters from the URL once, on load. The sync effect below never
+  // reads the URL back, so this can't loop with it.
+  if (browser) {
+    const qs = page.url.searchParams;
+    if (qs.get("reset") === "1") resetAllFilters();
+    applyFiltersFromUrl(qs);
+  }
+
+  // The block above only runs once, when this component is first created --
+  // but the top-nav link into this page (which carries `reset=1` to land on
+  // a clean view regardless of whatever filters were left set) is a link to
+  // this same route, so clicking it while already on /transactions is a
+  // same-route navigation that SvelteKit serves by reusing this exact
+  // component instance rather than remounting it. afterNavigate fires on
+  // every navigation that lands here, mount included, so it catches that
+  // case too -- gated on `reset` so it's a no-op for the sync effect's own
+  // goto() calls below, which never set it.
+  afterNavigate(({ to }) => {
+    const qs = to?.url.searchParams;
+    if (qs?.get("reset") === "1") {
+      resetAllFilters();
+      applyFiltersFromUrl(qs);
+    }
+  });
 
   // A month outside the active year can never match a trade -- "Jan 2026"
   // is meaningless once the year picker is on 2025. Rather than let that

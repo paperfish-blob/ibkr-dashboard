@@ -4,13 +4,13 @@
 
   let { children } = $props();
 
+  // Every filterable page resets to a clean default on the way in from
+  // this nav, rather than carrying over whatever was last left set --
+  // `reset=1` is each page's own signal to do that (see its +page.svelte).
   const nav = [
-    { href: "/", path: "/", label: "Overview" },
-    { href: "/transactions", path: "/transactions", label: "Transactions" },
-    { href: "/positions/overview", path: "/positions/overview", label: "Positions Overview" },
-    // Reset every other Positions filter on the way in from the nav --
-    // closed positions, grouped by entry date, is the default view this
-    // link should always land on, not whatever filters were last left set.
+    { href: "/?reset=1", path: "/", label: "Overview" },
+    { href: "/transactions?reset=1", path: "/transactions", label: "Transactions" },
+    { href: "/positions/overview?reset=1", path: "/positions/overview", label: "Positions Overview" },
     { href: "/positions?filter=closed&groupBy=entry&reset=1", path: "/positions", label: "Positions" },
     { href: "/history", path: "/history", label: "History" },
   ];
