@@ -251,8 +251,32 @@
   // onCrosshairMove/syncCrosshairTime and onVisibleRangeChange/
   // syncVisibleRange docs for how the echo back to the originating chart
   // is suppressed).
-  let syncedCrosshairTime = $state<string | null>(null);
-  let syncedVisibleRange = $state<{ from: string; to: string } | null>(null);
+  //
+  // Each report is stamped with the next value of a single shared counter,
+  // returned synchronously so the reporting chart can remember it as its
+  // own high-water mark -- a fast drag fires many of these before the
+  // round trip through the sibling chart completes, and without an
+  // ordering stamp a late echo of an already-superseded move looks
+  // "new" to the chart that originated it and gets reapplied, snapping
+  // that chart backward mid-drag. Comparing sequence numbers instead of
+  // the last-reported value lets a stale echo be recognized as stale
+  // regardless of how the round trip is timed.
+  let crosshairSeq = 0;
+  let syncedCrosshair = $state<{ time: string | null; seq: number }>({ time: null, seq: 0 });
+  function reportCrosshair(t: string | null): number {
+    crosshairSeq += 1;
+    syncedCrosshair = { time: t, seq: crosshairSeq };
+    return crosshairSeq;
+  }
+
+  let rangeSeq = 0;
+  let syncedRange = $state<{ from: string; to: string; seq: number } | null>(null);
+  function reportRange(r: { from: string; to: string } | null): number {
+    if (!r) return rangeSeq;
+    rangeSeq += 1;
+    syncedRange = { ...r, seq: rangeSeq };
+    return rangeSeq;
+  }
 
   const qqqWindowChange = $derived.by(() => {
     if (!focusRange || qqqBars.length < 2) return null;
@@ -459,10 +483,10 @@
             extendedAlerts={false}
             showTimeAxis={false}
             {focusRange}
-            onCrosshairMove={(t) => (syncedCrosshairTime = t)}
-            syncCrosshairTime={syncedCrosshairTime}
-            onVisibleRangeChange={(r) => (syncedVisibleRange = r)}
-            syncVisibleRange={syncedVisibleRange}
+            onCrosshairMove={reportCrosshair}
+            syncCrosshairTime={syncedCrosshair}
+            onVisibleRangeChange={reportRange}
+            syncVisibleRange={syncedRange}
           />
           <div class="divider"></div>
         {/if}
@@ -493,10 +517,10 @@
             {tradeMarkers}
             {focusRange}
             {selectedMarker}
-            onCrosshairMove={(t) => (syncedCrosshairTime = t)}
-            syncCrosshairTime={syncedCrosshairTime}
-            onVisibleRangeChange={(r) => (syncedVisibleRange = r)}
-            syncVisibleRange={syncedVisibleRange}
+            onCrosshairMove={reportCrosshair}
+            syncCrosshairTime={syncedCrosshair}
+            onVisibleRangeChange={reportRange}
+            syncVisibleRange={syncedRange}
           />
         {:else}
           <div class="chart-empty">

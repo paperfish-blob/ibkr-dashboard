@@ -69,21 +69,27 @@
     showTimeAxis?: boolean;
     /** Fired with the hovered bar's "YYYY-MM-DD" date (or null once the
      *  cursor leaves the chart) -- lets a sibling chart mirror the same
-     *  crosshair position. */
-    onCrosshairMove?: (date: string | null) => void;
+     *  crosshair position. Returns the sequence number the caller stamped
+     *  this report with, so this chart can remember it as its own
+     *  high-water mark (see syncCrosshairTime below). */
+    onCrosshairMove?: (date: string | null) => number;
     /** Drives this chart's crosshair from a sibling's own onCrosshairMove.
-     *  Ignored while the date matches what this chart itself just reported,
-     *  so the chart the user is actually hovering never fights its own
-     *  cursor; a date with no bar here (the two symbols' trading calendars
-     *  don't quite line up) just clears rather than guessing. */
-    syncCrosshairTime?: string | null;
+     *  Ignored while `seq` is at or behind the highest this chart has
+     *  already reported or applied, so a slow round trip of the chart's
+     *  own last move can never come back and re-fight a newer one, and the
+     *  chart the user is actually hovering never fights its own cursor; a
+     *  date with no bar here (the two symbols' trading calendars don't
+     *  quite line up) just clears rather than guessing. */
+    syncCrosshairTime?: { time: string | null; seq: number } | null;
     /** Fired whenever this chart's visible window changes (pan, zoom, or
      *  the initial default view), as {from, to} "YYYY-MM-DD" -- lets a
-     *  sibling chart mirror the same horizontal range. */
-    onVisibleRangeChange?: (range: { from: string; to: string } | null) => void;
+     *  sibling chart mirror the same horizontal range. Returns the sequence
+     *  number stamped on this report, same reasoning as onCrosshairMove. */
+    onVisibleRangeChange?: (range: { from: string; to: string } | null) => number;
     /** Drives this chart's visible range from a sibling's own
-     *  onVisibleRangeChange, the same echo-suppression as syncCrosshairTime. */
-    syncVisibleRange?: { from: string; to: string } | null;
+     *  onVisibleRangeChange, the same sequence-ordered echo-suppression as
+     *  syncCrosshairTime. */
+    syncVisibleRange?: { from: string; to: string; seq: number } | null;
   }
   let {
     history,
@@ -139,17 +145,19 @@
   let interactAbort: AbortController | null = null;
   let viewMoved = $state(false);
 
-  // What THIS chart itself last reported via onCrosshairMove/
-  // onVisibleRangeChange -- lets the sync-application effects below tell
-  // "a sibling chart echoing my own last move" apart from "a sibling
-  // reporting a genuinely new one", so applying an incoming sync value
-  // never fights the chart the user is actually interacting with, and a
-  // round trip through the parent settles instead of bouncing.
-  let ownCrosshairTime: string | null = null;
-  let ownRangeKey: string | null = null;
-  function rangeKey(r: { from: string; to: string }): string {
-    return `${r.from}-${r.to}`;
-  }
+  // The highest sequence number this chart has itself reported or applied
+  // via onCrosshairMove/onVisibleRangeChange -- lets the sync-application
+  // effects below ignore anything at or behind it, whether that's a sync
+  // echoing this chart's own last move or one that's since been
+  // superseded by a newer local move made while the echo was still in
+  // flight. A last-value comparison isn't enough for this: a fast drag
+  // fires many reports before each round trip through the parent
+  // completes, so a stale echo of an earlier one can arrive after this
+  // chart has already moved on -- comparing order rather than identity is
+  // what keeps that stale echo from being reapplied and snapping the
+  // chart backward mid-drag.
+  let lastCrosshairSeq = 0;
+  let lastRangeSeq = 0;
 
   // Only the hovered month's own candles get recolored, to a deepened
   // version of whichever hue they'd already be -- every other candle gets
@@ -398,19 +406,16 @@
 
     chart.subscribeCrosshairMove((param: MouseEventParams<Time>) => {
       const t = param.time !== undefined ? timeToIso(param.time) : null;
-      ownCrosshairTime = t;
-      onCrosshairMove?.(t);
+      lastCrosshairSeq = onCrosshairMove?.(t) ?? lastCrosshairSeq;
     });
 
     chart.timeScale().subscribeVisibleTimeRangeChange((range: Range<Time> | null) => {
       if (!range) {
-        ownRangeKey = null;
         onVisibleRangeChange?.(null);
         return;
       }
       const r = { from: timeToIso(range.from), to: timeToIso(range.to) };
-      ownRangeKey = rangeKey(r);
-      onVisibleRangeChange?.(r);
+      lastRangeSeq = onVisibleRangeChange?.(r) ?? lastRangeSeq;
     });
 
     resizeObs = new ResizeObserver(() => {
@@ -474,15 +479,17 @@
     }
   });
 
-  // Mirror a sibling chart's crosshair -- skipped while it matches what
-  // this chart itself just reported (the user is hovering this one
-  // directly; its own real crosshair wins), and cleared rather than
-  // guessed when this chart has no bar on that date at all.
+  // Mirror a sibling chart's crosshair -- skipped once its seq is at or
+  // behind what this chart has already reported or applied (the user is
+  // hovering this one directly, or this is a stale echo of an earlier
+  // move; either way its own real crosshair wins), and cleared rather
+  // than guessed when this chart has no bar on that date at all.
   $effect(() => {
     chartVersion;
-    const t = syncCrosshairTime;
-    if (!chart || !candles) return;
-    if (t === ownCrosshairTime) return;
+    const sync = syncCrosshairTime;
+    if (!chart || !candles || !sync || sync.seq <= lastCrosshairSeq) return;
+    lastCrosshairSeq = sync.seq;
+    const t = sync.time;
     if (t === null) {
       chart.clearCrosshairPosition();
       return;
@@ -495,15 +502,13 @@
     }
   });
 
-  // Mirror a sibling chart's visible window -- same echo-suppression via
-  // ownRangeKey as the crosshair sync above.
+  // Mirror a sibling chart's visible window -- same seq-ordered
+  // echo-suppression as the crosshair sync above.
   $effect(() => {
     chartVersion;
     const range = syncVisibleRange;
-    if (!chart || !range) return;
-    const key = rangeKey(range);
-    if (key === ownRangeKey) return;
-    ownRangeKey = key;
+    if (!chart || !range || range.seq <= lastRangeSeq) return;
+    lastRangeSeq = range.seq;
     chart.timeScale().setVisibleRange({
       from: Math.floor(new Date(range.from).getTime() / 1000) as unknown as Time,
       to: Math.floor(new Date(range.to).getTime() / 1000) as unknown as Time,
