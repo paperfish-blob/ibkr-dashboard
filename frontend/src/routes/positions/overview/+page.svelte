@@ -19,6 +19,7 @@
   import CumulativeChart from "$lib/components/CumulativeChart.svelte";
   import MonthlyPnL from "$lib/components/MonthlyPnL.svelte";
   import IndexBenchmark from "$lib/components/IndexBenchmark.svelte";
+  import TopPositions from "$lib/components/TopPositions.svelte";
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
   import AlertBar from "$lib/components/AlertBar.svelte";
   import PeriodPicker from "$lib/components/PeriodPicker.svelte";
@@ -74,6 +75,7 @@
   ];
 
   let hoveredMonth = $state<string | null>(null);
+  let topN = $state<5 | 10 | 20>(10);
 
   const IDX_LOOKBACK_MIN_DAYS = 765;
   let qqqBars = $state<OHLCVBar[]>([]);
@@ -351,6 +353,18 @@
         onViewChange={(v: MonthlyPnlView) => monthlyPnlView.set(v)}
       />
       <IndexBenchmark symbol="QQQ" name="Nasdaq 100" bars={qqqBars} highlightMonth={hoveredMonth} />
+    </div>
+    <div class="gap"></div>
+    <div class="side-grid">
+      <TopPositions positions={$positions.positions} {currency} mode="win" {topN} onTopNChange={(n) => (topN = n)} />
+      <TopPositions
+        positions={$positions.positions}
+        {currency}
+        mode="loss"
+        {topN}
+        onTopNChange={(n) => (topN = n)}
+        showControl={false}
+      />
     </div>
   {:else}
     <div class="panel-empty">

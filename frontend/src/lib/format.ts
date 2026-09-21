@@ -108,6 +108,14 @@ export function fmtDay(iso: string): string {
   return parseISODay(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
 }
 
+/** Same as fmtDay, plus a 2-digit year -- for a pair of dates close enough
+ *  together that bare month/day alone can't tell which year either one
+ *  fell in (a streak or trade spanning New Year's, several years of
+ *  history compressed into one compact row). */
+export function fmtDayYear(iso: string): string {
+  return `${fmtDay(iso)} '${String(parseISODay(iso).getFullYear()).slice(-2)}`;
+}
+
 /** Full date for day-group headers: "September 11, 2026". */
 export function fmtFullDate(iso: string): string {
   return parseISODay(iso).toLocaleDateString("en-US", {
