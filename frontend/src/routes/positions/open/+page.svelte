@@ -15,19 +15,33 @@
   import PageHeader from "$lib/components/PageHeader.svelte";
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
   import AlertBar from "$lib/components/AlertBar.svelte";
+  import SegToggle from "$lib/components/SegToggle.svelte";
+  import PotentialPnlPanel from "$lib/components/PotentialPnlPanel.svelte";
+  import type { PositionSeries } from "$lib/components/PotentialPnlPanel.svelte";
   import OpenPositionsSummary from "$lib/components/OpenPositionsSummary.svelte";
   import OpenPositionsList from "$lib/components/OpenPositionsList.svelte";
   import type { OpenPositionsRow } from "$lib/components/OpenPositionsList.svelte";
-  import { api, type Position } from "$lib/api";
+  import { api, type CumulativePoint, type OHLCVBar, type Position } from "$lib/api";
   import { daysSince, num } from "$lib/format";
   import { positions, positionsLoading, positionsError, refreshPositions, setPeriod } from "$lib/stores";
 
   const POLL_MS = 30_000;
   let refreshing = $state(false);
 
+  // Independent of the app-wide Period picker (forced to "all" below) --
+  // a floor on the position's own open year, for working around specific
+  // years whose sync is known to be unreliable (2022, at the time this was
+  // added) without hiding them from every other page too. "all" shows
+  // everything; picking a year hides anything opened earlier. `null` means
+  // "no explicit choice yet" -- effectiveFromYear below resolves that to
+  // the newest year with an open position, rather than hardcoding a year
+  // that would go stale.
+  let fromYear = $state<string | null>(null);
+
   function handleReset(url: URL) {
     if (url.searchParams.get("reset") !== "1") return;
     setPeriod("all");
+    fromYear = null;
     goto("/positions/open", { replaceState: true, noScroll: true, keepFocus: true });
   }
   if (browser) handleReset(page.url);
@@ -67,28 +81,54 @@
     ($positions?.positions ?? []).filter((p) => p.is_open && !p.is_carry_in && p.asset_category === "CASH").length,
   );
 
-  // One latest-close fetch per distinct symbol, cached for the session --
-  // small N in practice (only currently-open symbols), and cheap since
-  // it's the same OHLCV endpoint the detail page's own chart already uses.
-  let currentPrices = $state<Map<string, number>>(new Map());
-  let priceFailed = $state<Set<string>>(new Set());
+  // Only offer years that actually have an open position -- same rule
+  // PeriodPicker already follows for downloaded years, so choosing "2023"
+  // never silently shows nothing just because nothing opened that year.
+  // Newest first (the years someone's actually about to click), "All" last.
+  const yearOptions = $derived.by(() => {
+    const years = new Set(openPositions.filter((p) => p.open_date).map((p) => p.open_date!.slice(0, 4)));
+    return [
+      ...[...years].sort().reverse().map((y) => ({ label: y, value: y })),
+      { label: "All", value: "all" },
+    ];
+  });
+
+  // Default to the newest year with an open position rather than "all",
+  // so the page opens already clear of older, less-reliable years without
+  // needing to hardcode which year that is.
+  const effectiveFromYear = $derived(fromYear ?? yearOptions.find((o) => o.value !== "all")?.value ?? "all");
+
+  const yearFilteredPositions = $derived(
+    effectiveFromYear === "all"
+      ? openPositions
+      : openPositions.filter((p) => p.open_date && p.open_date.slice(0, 4) >= effectiveFromYear),
+  );
+  const hiddenByFromYear = $derived(openPositions.length - yearFilteredPositions.length);
+
+  // Full daily history per distinct symbol, back to that position's own
+  // open date (not just a handful of recent days) -- needed for the
+  // potential-P&L-over-time chart below, and its last bar doubles as the
+  // "current price" the table itself uses. Cached for the session, same
+  // OHLCV endpoint the detail page's own chart already uses.
+  let historyBars = $state<Map<string, OHLCVBar[]>>(new Map());
+  let historyFailed = $state<Set<string>>(new Set());
 
   $effect(() => {
-    const symbols = [...new Set(openPositions.map((p) => p.symbol))];
-    const missing = symbols.filter((s) => !currentPrices.has(s) && !priceFailed.has(s));
-    if (missing.length === 0) return;
+    const wanted = yearFilteredPositions
+      .filter((p) => p.open_date && !historyBars.has(p.symbol) && !historyFailed.has(p.symbol))
+      .map((p) => ({ symbol: p.symbol, lookbackDays: daysSince(p.open_date!) + 5 }));
+    if (wanted.length === 0) return;
     (async () => {
-      for (const symbol of missing) {
+      for (const { symbol, lookbackDays } of wanted) {
         try {
-          const res = await api.marketDataOhlcv(symbol, 5);
-          const last = res.ok ? res.bars.at(-1) : undefined;
-          if (last) {
-            currentPrices = new Map(currentPrices).set(symbol, last.close);
+          const res = await api.marketDataOhlcv(symbol, lookbackDays);
+          if (res.ok && res.bars.length) {
+            historyBars = new Map(historyBars).set(symbol, res.bars);
           } else {
-            priceFailed = new Set(priceFailed).add(symbol);
+            historyFailed = new Set(historyFailed).add(symbol);
           }
         } catch {
-          priceFailed = new Set(priceFailed).add(symbol);
+          historyFailed = new Set(historyFailed).add(symbol);
         }
       }
     })();
@@ -102,7 +142,7 @@
     const qtyOpen = num(p.quantity);
     const entryPrice = num(p.entry_price);
     const costBasis = qtyOpen * entryPrice;
-    const current = currentPrices.get(p.symbol) ?? null;
+    const current = historyBars.get(p.symbol)?.at(-1)?.close ?? null;
     const unrealized =
       current === null ? null : (p.direction === "long" ? current - entryPrice : entryPrice - current) * qtyOpen;
     return {
@@ -118,11 +158,109 @@
     };
   }
 
-  const rows = $derived(openPositions.map(toRow));
+  const rows = $derived(yearFilteredPositions.map(toRow));
   const totalUnrealized = $derived(rows.reduce((sum, r) => sum + (r.unrealized ?? 0), 0));
   const totalCost = $derived(rows.reduce((sum, r) => sum + r.costBasis, 0));
   const fullCount = $derived(rows.filter((r) => r.status === "full").length);
   const partialCount = $derived(rows.filter((r) => r.status === "partial").length);
+
+  // Day-by-day "what would this position be worth if I closed it at that
+  // day's close" -- cumulative realized P&L from any exits already taken
+  // by that day, plus mark-to-market on whatever quantity was still open
+  // as of that day (average cost of the open remainder, standard
+  // average-cost accounting: an exit realizes P&L and reduces quantity but
+  // never changes the remaining shares' average cost). A position with
+  // more than one entry has a cost basis that isn't constant over its
+  // life -- e.g. 1 share bought alone, then 12 more added two years
+  // later -- so this replays the actual entry/exit legs in order rather
+  // than applying the position's single overall (weighted, present-day)
+  // entry price across its whole history.
+  interface DayPoint {
+    date: string;
+    value: number;
+  }
+  function potentialPnlSeries(p: Position, bars: OHLCVBar[]): DayPoint[] {
+    const events = [
+      ...p.entry_legs.map((leg) => ({
+        date: leg.trade_date,
+        qty: num(leg.quantity),
+        price: leg.price === null ? null : num(leg.price),
+        realized: 0,
+        isExit: false,
+      })),
+      ...p.exit_legs.map((leg) => ({
+        date: leg.trade_date,
+        qty: num(leg.quantity),
+        price: null,
+        realized: num(leg.realized_pnl),
+        isExit: true,
+      })),
+    ].sort((a, b) => a.date.localeCompare(b.date));
+
+    const dirSign = p.direction === "long" ? 1 : -1;
+    let qty = 0;
+    let avgCost = 0;
+    let realizedSoFar = 0;
+    let ei = 0;
+    const out: DayPoint[] = [];
+
+    for (const bar of bars) {
+      if (p.open_date && bar.time < p.open_date) continue;
+      while (ei < events.length && events[ei].date <= bar.time) {
+        const e = events[ei];
+        if (e.isExit) {
+          realizedSoFar += e.realized;
+          qty -= e.qty;
+        } else if (e.price !== null) {
+          const newQty = qty + e.qty;
+          avgCost = newQty > 0 ? (avgCost * qty + e.price * e.qty) / newQty : e.price;
+          qty = newQty;
+        }
+        ei += 1;
+      }
+      out.push({ date: bar.time, value: realizedSoFar + (bar.close - avgCost) * qty * dirSign });
+    }
+    return out;
+  }
+
+  // Every open position's own day-by-day series, kept per-row (rather than
+  // summed right away) so the Potential P&L panel can also chart one
+  // position at a time or normalize them onto a shared axis -- see
+  // PotentialPnlPanel.svelte.
+  const positionSeries = $derived.by((): PositionSeries[] =>
+    rows
+      .map((row) => {
+        const bars = historyBars.get(row.p.symbol);
+        return bars ? { row, series: potentialPnlSeries(row.p, bars) } : null;
+      })
+      .filter((p): p is PositionSeries => p !== null && p.series.length > 0),
+  );
+
+  // Union of every position's own series, forward-filled per symbol so a
+  // day one symbol didn't trade on (or hasn't opened as of yet) still
+  // contributes its last-known value rather than a gap in the sum.
+  const combinedSeries = $derived.by((): CumulativePoint[] => {
+    const perPosition = positionSeries.map((p) => p.series);
+    if (perPosition.length === 0) return [];
+
+    const dateSet = new Set<string>();
+    for (const series of perPosition) for (const pt of series) dateSet.add(pt.date);
+    const dates = [...dateSet].sort();
+
+    const pointers = perPosition.map(() => 0);
+    const lastVals = perPosition.map(() => 0);
+    return dates.map((date) => {
+      let sum = 0;
+      perPosition.forEach((series, i) => {
+        while (pointers[i] < series.length && series[pointers[i]].date <= date) {
+          lastVals[i] = series[pointers[i]].value;
+          pointers[i] += 1;
+        }
+        sum += lastVals[i];
+      });
+      return { date, realized_pnl: "0", cumulative: String(sum), trade_count: 0 };
+    });
+  });
 </script>
 
 <svelte:head><title>Open Positions · IBKR Realized P&L</title></svelte:head>
@@ -134,13 +272,26 @@
     sticky
     onRefresh={handleRefresh}
     {refreshing}
-  />
+  >
+    {#snippet right()}
+      {#if yearOptions.length > 1}
+        <SegToggle label="From year" options={yearOptions} active={effectiveFromYear} onChange={(v) => (fromYear = v)} />
+      {/if}
+    {/snippet}
+  </PageHeader>
   <div class="excl-note">
-    Showing Open (Full) and Open (Partial) only · {carryInExcluded} carry-in position{carryInExcluded === 1
+    Showing Open (Full) and Open (Partial){effectiveFromYear === "all"
+      ? ""
+      : ` from ${effectiveFromYear} onward`} only · {carryInExcluded} carry-in position{carryInExcluded === 1
       ? ""
       : "s"} excluded (entry price/date unknown for those, so cost basis and unrealized P&amp;L can't be computed)
     {#if cashExcluded > 0}
       · {cashExcluded} cash balance{cashExcluded === 1 ? "" : "s"} excluded (no market price to mark against)
+    {/if}
+    {#if hiddenByFromYear > 0}
+      <span class="year-badge"
+        >{hiddenByFromYear} pre-{effectiveFromYear} position{hiddenByFromYear === 1 ? "" : "s"} hidden</span
+      >
     {/if}
   </div>
 
@@ -164,6 +315,10 @@
         {currency}
       />
       <div class="gap"></div>
+      {#if positionSeries.length > 0}
+        <PotentialPnlPanel positions={positionSeries} {combinedSeries} {currency} />
+        <div class="gap"></div>
+      {/if}
       <OpenPositionsList {rows} {currency} />
     {/if}
   {:else}
@@ -181,6 +336,17 @@
     color: var(--dim-45);
     margin-top: -8px;
     margin-bottom: 16px;
+  }
+  .year-badge {
+    display: inline-block;
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-bold);
+    letter-spacing: 0.04em;
+    padding: 2px 7px;
+    border-radius: var(--radius-pill);
+    background: var(--amber-bg);
+    color: var(--amber);
+    margin-left: 6px;
   }
   .gap {
     height: 16px;
