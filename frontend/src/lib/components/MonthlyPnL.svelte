@@ -120,6 +120,14 @@
     return [...buckets.values()].sort((a, b) => a.key.localeCompare(b.key));
   });
 
+  // Table view lists months latest-first, unlike the charts (which read
+  // left-to-right as a timeline) and the mini-strip above the table (which
+  // stays in that same chart order) -- an index list rather than a
+  // reversed copy of `months` itself, so hoveredIndex and the mini-strip's
+  // own bars (both keyed to the original ascending order) don't need a
+  // second, table-only notion of "which month is index i".
+  const monthOrderDesc = $derived(months.map((_, i) => i).reverse());
+
   const grandTotal = $derived(months.reduce((sum, m) => sum + m.total, 0));
   const totalTrades = $derived(months.reduce((sum, m) => sum + m.trades, 0));
 
@@ -507,7 +515,8 @@
           </tr>
         </thead>
         <tbody>
-          {#each months as m, i (m.key)}
+          {#each monthOrderDesc as i (months[i].key)}
+            {@const m = months[i]}
             <tr
               onclick={() => openMonth(m.key)}
               onmouseenter={() => setHoveredIndex(i)}
