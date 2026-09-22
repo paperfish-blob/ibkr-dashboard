@@ -66,7 +66,7 @@
     <div class="body">
       {#each rows as p, i (p.symbol + (p.open_date ?? "") + p.open_time + (p.exit_date ?? ""))}
         {@const pnl = num(p.realized_pnl)}
-        <a class="row" href="/positions/detail?{positionDetailParams(p)}">
+        <a class="row" href="/positions/detail?{positionDetailParams(p)}" target="_blank" rel="noopener">
           <div class="fill" class:up={mode === "win"} class:dn={mode === "loss"} style="width:{(Math.abs(pnl) / maxAbsPnl) * 100}%"></div>
           <div class="rank {rankClass(i + 1)}">{i + 1}</div>
           <div class="sym">{p.symbol}<span class="tag">{p.asset_category}</span></div>

@@ -145,6 +145,8 @@
                 <a
                   class="sym-link"
                   href="/positions/detail?{positionDetailParams(p)}"
+                  target="_blank"
+                  rel="noopener"
                   onclick={(e) => e.stopPropagation()}
                 >
                   {p.symbol}
