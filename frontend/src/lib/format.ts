@@ -125,6 +125,16 @@ export function fmtFullDate(iso: string): string {
   });
 }
 
+/** Whole days between an ISO date and today (local calendar days, not a
+ *  24h-multiple), for "how long has this been open" -- floored so a
+ *  position opened earlier today reads as 0d rather than a fraction. */
+export function daysSince(iso: string): number {
+  const then = parseISODay(iso);
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  return Math.max(0, Math.round((startOfToday.getTime() - then.getTime()) / 86_400_000));
+}
+
 /** Clock time from an ISO timestamp: "4:20 PM". Null renders as an em dash. */
 export function fmtTime(iso: string | null): string {
   if (!iso) return EM_DASH;

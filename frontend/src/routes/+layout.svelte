@@ -12,6 +12,7 @@
     { href: "/transactions?reset=1", path: "/transactions", label: "Transactions" },
     { href: "/positions/overview?reset=1", path: "/positions/overview", label: "Positions Overview" },
     { href: "/positions?filter=closed&groupBy=entry&reset=1", path: "/positions", label: "Positions" },
+    { href: "/positions/open?reset=1", path: "/positions/open", label: "Open Positions" },
     { href: "/history", path: "/history", label: "History" },
   ];
 
@@ -44,6 +45,11 @@
                 <path d="M3 3v10h10" />
                 <circle cx="6" cy="10" r="1.3" />
                 <circle cx="11" cy="6" r="1.3" />
+              </svg>
+            {:else if item.path === "/positions/open"}
+              <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M2 6.5h12v6.5H2z" />
+                <path d="M6 6.5V4.8A1.3 1.3 0 0 1 7.3 3.5h1.4A1.3 1.3 0 0 1 10 4.8v1.7" />
               </svg>
             {:else}
               <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">

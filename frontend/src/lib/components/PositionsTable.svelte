@@ -49,6 +49,19 @@
     return p.exit_legs.map((leg, i) => ({ leg, n: i + 1 })).reverse();
   }
 
+  /** Open/closed status, with carry-in folded in as a qualifier on
+   *  whichever of the three applies rather than a 4th exclusive value --
+   *  a carry-in position (the first trade we ever see for it already
+   *  closes something opened before the fetched date range) has by
+   *  definition already had at least one exit, so it can pair with
+   *  "closed" or "partial" but never with "full". */
+  function statusInfo(p: Position): { label: string; cls: string; carryIn: boolean } {
+    const carryIn = p.is_carry_in;
+    if (!p.is_open) return { label: "Closed", cls: "closed", carryIn };
+    if (p.exit_count > 0) return { label: "Open (Partial)", cls: "partial", carryIn };
+    return { label: "Open (Full)", cls: "full", carryIn };
+  }
+
   interface Row {
     p: Position;
     i: number;
@@ -85,8 +98,8 @@
     return groups;
   });
 
-  /** Symbol, Side, Qty + Price/Amount/Comm./Order ID + Realized P&L etc. */
-  const totalCols = 14;
+  /** Symbol, Status, Side, Qty + Price/Amount/Comm./Order ID + Realized P&L etc. */
+  const totalCols = 15;
   /** The day band spans everything left of its count and total cells. */
   const dayRowSpan = totalCols - 2;
 </script>
@@ -101,6 +114,7 @@
           <tr>
             <th class="chev-col"></th>
             <th>Symbol</th>
+            <th>Status</th>
             <th class="num">Exits #</th>
             <th>Date</th>
             <th>Time</th>
@@ -128,6 +142,7 @@
             {@const canExpand = p.exit_legs.length > 0}
             {@const isExpanded = expanded.has(i)}
             {@const entryAmount = grossAmount(p.entry_price, p.quantity, p.direction === "short" ? "SELL" : "BUY")}
+            {@const status = statusInfo(p)}
             <tr
               class="pos-row"
               class:open={p.is_open}
@@ -153,17 +168,22 @@
                 </a>
                 <span class="tag">{p.asset_category}</span>
               </td>
+              <td>
+                <span
+                  class="status {status.cls}"
+                  title={status.carryIn
+                    ? "Opened before the fetched date range -- entry date, price and true position size are unknown"
+                    : undefined}
+                >
+                  {status.label}{#if status.carryIn}<span class="q"> · Carry-in</span>{/if}
+                </span>
+              </td>
               <td class="num">{p.exit_count || EM_DASH}</td>
               <td class="full-date">{p.open_date ? fmtFullDate(p.open_date) : EM_DASH}</td>
               <td class="dim">{p.open_time || EM_DASH}</td>
               <td class="num dash">{EM_DASH}</td>
               <td>
                 <span class="dir {p.direction}">{p.direction.toUpperCase()}</span>
-                {#if p.is_carry_in}
-                  <span class="badge" title="Opened before the fetched date range -- entry date, price and true position size are unknown">
-                    CARRY-IN
-                  </span>
-                {/if}
               </td>
               <td class="num">{fmtQty(num(p.quantity))}</td>
               <td class="num">{p.entry_price !== null ? fmtPriceLike(num(p.entry_price), currency, 4) : EM_DASH}</td>
@@ -180,6 +200,7 @@
               {#each numberedLegs(p) as { leg, n } (n)}
                 {@const legAmount = grossAmount(leg.price, leg.quantity, leg.buy_sell)}
                 <tr class="leg-row">
+                  <td></td>
                   <td></td>
                   <td></td>
                   <td class="leg-label">Exit {n}</td>
@@ -384,6 +405,35 @@
     color: var(--dim-45);
     border: 1px dashed var(--border);
     cursor: help;
+  }
+
+  .status {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 4px;
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-bold);
+    letter-spacing: 0.03em;
+    padding: 3px 8px;
+    border-radius: var(--radius-pill);
+    white-space: nowrap;
+  }
+  .status .q {
+    font-weight: var(--weight-medium);
+    opacity: 0.72;
+  }
+  .status.closed {
+    color: var(--dim-45);
+    border: 1px dashed var(--border);
+    background: transparent;
+  }
+  .status.full {
+    color: var(--accent);
+    background: var(--accent-bg);
+  }
+  .status.partial {
+    color: var(--amber);
+    background: var(--amber-bg);
   }
 
   .pnl {
