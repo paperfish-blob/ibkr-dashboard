@@ -1,9 +1,9 @@
 <script lang="ts">
   /**
-   * Headline panel for the Open Positions page -- unrealized P&L (mark-to-
-   * market against each symbol's latest close) as the hero figure, same
-   * grid shape as PositionHeadlineStat, with the Full/Partial/Carry-in
-   * breakdown as the meta side.
+   * Headline panel for the Open Positions page -- three equal-weight stat
+   * tiles (Unrealized P&L, Total Cost Basis, Total Open) rather than one
+   * hero number with the rest demoted to a small side panel, so Cost Basis
+   * and the open count get the same visual attention as P&L does.
    */
   import { fmtMoney, toneOf } from "$lib/format";
 
@@ -21,43 +21,47 @@
 </script>
 
 <div class="panel">
-  <div class="body">
-    <div class="eyebrow">Unrealized P&amp;L (mark-to-market, latest close)</div>
+  <div class="tile">
+    <div class="eyebrow">Unrealized P&amp;L</div>
     <div class="big {toneOf(totalUnrealized)}">{fmtMoney(totalUnrealized, currency)}</div>
-    <div class="kicker">{openCount} position{openCount === 1 ? "" : "s"} currently open</div>
+    <div class="kicker">Mark-to-market, latest close</div>
   </div>
 
-  <div class="meta">
-    <div class="meta-row hero">
-      <span class="meta-label">Total Cost Basis</span>
-      <span class="meta-val">{fmtMoney(totalCost, currency).replace("+", "")}</span>
+  <div class="tile">
+    <div class="eyebrow">Total Cost Basis</div>
+    <div class="big ink">{fmtMoney(totalCost, currency).replace("+", "")}</div>
+    <div class="kicker">Across every open position</div>
+  </div>
+
+  <div class="tile">
+    <div class="eyebrow">Total Open</div>
+    <div class="open-line">
+      <span class="open-num">{openCount}</span>
+      <span class="open-unit">open</span>
     </div>
-    <div class="meta-row">
-      <span class="meta-label">Open (Full)</span>
-      <span class="meta-val">{fullCount}</span>
+    <div class="breakdown">
+      <span class="chip full">{fullCount} Full</span>
+      <span class="chip partial">{partialCount} Partial</span>
     </div>
-    <div class="meta-row">
-      <span class="meta-label">Open (Partial)</span>
-      <span class="meta-val">{partialCount}</span>
-    </div>
-    <div class="meta-row">
-      <span class="meta-label">Carry-in (excluded)</span>
-      <span class="meta-val">{carryInExcluded}</span>
-    </div>
+    <div class="foot">{carryInExcluded} carry-in excluded</div>
   </div>
 </div>
 
 <style>
   .panel {
     display: grid;
-    grid-template-columns: 1fr 260px;
+    grid-template-columns: repeat(3, 1fr);
     background: var(--surface);
     border: 1px solid var(--border-05);
     border-radius: var(--radius-lg);
     overflow: hidden;
   }
-  .body {
+  .tile {
     padding: 20px 24px;
+    border-left: 1px solid var(--border-05);
+  }
+  .tile:first-child {
+    border-left: none;
   }
   .eyebrow {
     font-size: var(--text-2xs);
@@ -67,10 +71,11 @@
     color: var(--dim-55);
   }
   .big {
-    font-size: var(--text-5xl);
-    font-weight: var(--weight-semibold);
+    font-size: var(--text-3xl);
+    font-weight: var(--weight-bold);
     letter-spacing: -0.02em;
     margin-top: 4px;
+    font-variant-numeric: tabular-nums;
   }
   .big.pos {
     color: var(--up);
@@ -78,7 +83,8 @@
   .big.neg {
     color: var(--dn);
   }
-  .big.flat {
+  .big.flat,
+  .big.ink {
     color: var(--text);
   }
   .kicker {
@@ -86,35 +92,47 @@
     color: var(--dim-55);
     margin-top: 8px;
   }
-
-  .meta {
-    border-left: 1px solid var(--border-05);
-    padding: 20px 24px;
+  .open-line {
     display: flex;
-    flex-direction: column;
-    gap: 12px;
-    justify-content: center;
-  }
-  .meta-row {
-    display: flex;
-    justify-content: space-between;
     align-items: baseline;
-    font-size: var(--text-xs);
+    gap: 8px;
+    margin-top: 4px;
   }
-  .meta-row.hero {
-    padding-bottom: 10px;
-    margin-bottom: 2px;
-    border-bottom: 1px solid var(--border-05);
-  }
-  .meta-label {
-    color: var(--dim-45);
-  }
-  .meta-val {
-    font-weight: var(--weight-semibold);
+  .open-num {
+    font-size: var(--text-4xl);
+    font-weight: var(--weight-bold);
+    letter-spacing: -0.03em;
+    line-height: 1;
     color: var(--text);
     font-variant-numeric: tabular-nums;
   }
-  .meta-row.hero .meta-val {
-    font-size: var(--text-lg);
+  .open-unit {
+    font-size: var(--text-md);
+    font-weight: var(--weight-semibold);
+    color: var(--text);
+  }
+  .breakdown {
+    display: flex;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .chip {
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-bold);
+    padding: 3px 9px;
+    border-radius: var(--radius-pill);
+  }
+  .chip.full {
+    color: var(--accent);
+    background: var(--accent-bg);
+  }
+  .chip.partial {
+    color: var(--amber);
+    background: var(--amber-bg);
+  }
+  .foot {
+    font-size: var(--text-2xs);
+    color: var(--dim-45);
+    margin-top: 8px;
   }
 </style>

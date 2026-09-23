@@ -20,9 +20,10 @@
   import type { PositionSeries } from "$lib/components/PotentialPnlPanel.svelte";
   import OpenPositionsSummary from "$lib/components/OpenPositionsSummary.svelte";
   import OpenPositionsList from "$lib/components/OpenPositionsList.svelte";
+  import OpenPositionCountPanel from "$lib/components/OpenPositionCountPanel.svelte";
   import type { OpenPositionsRow } from "$lib/components/OpenPositionsList.svelte";
   import { api, type CumulativePoint, type OHLCVBar, type Position } from "$lib/api";
-  import { daysSince, num } from "$lib/format";
+  import { daysSince, num, parseISODay } from "$lib/format";
   import { positions, positionsLoading, positionsError, refreshPositions, setPeriod } from "$lib/stores";
 
   const POLL_MS = 30_000;
@@ -105,6 +106,16 @@
   );
   const hiddenByFromYear = $derived(openPositions.length - yearFilteredPositions.length);
 
+  // Every position, open OR closed, excluding the same carry-in/cash cases
+  // and under the same "From year" floor as everything else on this page --
+  // for the concurrency panel below, which needs a position's whole life
+  // span (including ones already closed) to count overlaps correctly, not
+  // just what's open today.
+  const allPositionsFiltered = $derived.by(() => {
+    const all = ($positions?.positions ?? []).filter((p) => !p.is_carry_in && p.asset_category !== "CASH");
+    return effectiveFromYear === "all" ? all : all.filter((p) => p.open_date && p.open_date.slice(0, 4) >= effectiveFromYear);
+  });
+
   // Full daily history per distinct symbol, back to that position's own
   // open date (not just a handful of recent days) -- needed for the
   // potential-P&L-over-time chart below, and its last bar doubles as the
@@ -181,6 +192,16 @@
     open: number;
     close: number;
   }
+  function addOneDay(iso: string): string {
+    const d = parseISODay(iso);
+    d.setDate(d.getDate() + 1);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  function isWeekend(iso: string): boolean {
+    const day = parseISODay(iso).getDay();
+    return day === 0 || day === 6;
+  }
+
   function potentialPnlSeries(p: Position, bars: OHLCVBar[]): DayPoint[] {
     const events = [
       ...p.entry_legs.map((leg) => ({
@@ -199,16 +220,42 @@
       })),
     ].sort((a, b) => a.date.localeCompare(b.date));
 
+    // Only real, settled closes -- a bar still forming intraday (today,
+    // before the close print) comes back with OHLC all null and only
+    // volume ticking, and is treated exactly like a day Yahoo has no bar
+    // for at all: forward-filled below rather than read as `null - avgCost`
+    // coercing to `-avgCost`, which would read as "lost the entire cost
+    // basis today."
+    const barsByDate = new Map(bars.filter((b) => typeof b.close === "number").map((b) => [b.time, b]));
+    if (!p.open_date || barsByDate.size === 0) return [];
+
     const dirSign = p.direction === "long" ? 1 : -1;
     let qty = 0;
     let avgCost = 0;
     let realizedSoFar = 0;
     let ei = 0;
+    let lastOpen: number | null = null;
+    let lastClose: number | null = null;
     const out: DayPoint[] = [];
 
-    for (const bar of bars) {
-      if (p.open_date && bar.time < p.open_date) continue;
-      while (ei < events.length && events[ei].date <= bar.time) {
+    // Walked one weekday at a time from the entry date through the last
+    // known bar, rather than only the calendar days `bars` happens to
+    // contain -- Yahoo Finance sometimes has no daily bar at all for a
+    // given weekday (seen live: a position opened 2026-09-21, Yahoo's
+    // daily bars for that ticker jump straight from 09-21 to 09-23,
+    // skipping 09-22 entirely). Iterating `bars` directly would silently
+    // drop that day rather than gap-fill it, which read on the chart as a
+    // smoothed line quietly skipping over a real day the position was
+    // open. A day with no bar of its own forward-fills the last known
+    // close (no market update = no assumed price change); before any
+    // close is known yet, it marks at the position's own average cost
+    // instead (exact, from IBKR, independent of a market data provider
+    // having a candle for that day) -- zero unrealized since entry, plus
+    // whatever's realized same-day.
+    const lastBarDate = [...barsByDate.keys()].sort().at(-1)!;
+    let cursor = p.open_date;
+    while (cursor <= lastBarDate) {
+      while (ei < events.length && events[ei].date <= cursor) {
         const e = events[ei];
         if (e.isExit) {
           realizedSoFar += e.realized;
@@ -220,20 +267,22 @@
         }
         ei += 1;
       }
-      // A bar still forming intraday (today, before the close print) comes
-      // back with OHLC all null and only volume ticking -- skip emitting a
-      // point for it rather than let `null - avgCost` silently coerce to
-      // `-avgCost`, which reads as "this position lost its entire cost
-      // basis today." Events for this date are already applied above, so
-      // qty/avgCost/realizedSoFar stay correct for the next bar that does
-      // have a close.
-      if (typeof bar.close !== "number") continue;
-      out.push({
-        date: bar.time,
-        value: realizedSoFar + (bar.close - avgCost) * qty * dirSign,
-        open: bar.open,
-        close: bar.close,
-      });
+      const bar = barsByDate.get(cursor);
+      if (bar) {
+        lastOpen = bar.open;
+        lastClose = bar.close;
+      }
+      if (!isWeekend(cursor)) {
+        const close = lastClose ?? avgCost;
+        const open = lastOpen ?? avgCost;
+        out.push({
+          date: cursor,
+          value: realizedSoFar + (close - avgCost) * qty * dirSign,
+          open,
+          close,
+        });
+      }
+      cursor = addOneDay(cursor);
     }
     return out;
   }
@@ -334,6 +383,8 @@
         <PotentialPnlPanel positions={positionSeries} {combinedSeries} {currency} />
         <div class="gap"></div>
       {/if}
+      <OpenPositionCountPanel positions={allPositionsFiltered} />
+      <div class="gap"></div>
       <OpenPositionsList {rows} {currency} />
     {/if}
   {:else}
