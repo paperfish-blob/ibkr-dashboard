@@ -25,11 +25,13 @@
   import SegToggle from "./SegToggle.svelte";
   import type { OpenPositionsRow } from "./OpenPositionsList.svelte";
   import { positionDetailParams, type CumulativePoint } from "$lib/api";
-  import { fmtDay, fmtDayYear, fmtMoney, toneOf, num, EM_DASH } from "$lib/format";
+  import { fmtDay, fmtDayYear, fmtMoney, fmtPriceLike, toneOf, num, EM_DASH } from "$lib/format";
 
   export interface DayPoint {
     date: string;
     value: number;
+    open: number;
+    close: number;
   }
   export interface PositionSeries {
     row: OpenPositionsRow;
@@ -98,6 +100,9 @@
     yTickFmt: (v: number) => string;
     tooltipFmt: (v: number) => string;
     legend?: boolean;
+    /** Extra tooltip lines (e.g. that day's open/close) below the main
+     *  value line, keyed by the hovered point's index into the dataset. */
+    afterLabel?: (index: number) => string[];
   }) {
     return {
       responsive: true,
@@ -125,6 +130,7 @@
           callbacks: {
             label: (c: { parsed: { y: number }; dataset: { label?: string } }) =>
               (opts.legend && c.dataset.label ? `${c.dataset.label}: ` : "") + opts.tooltipFmt(c.parsed.y),
+            afterLabel: opts.afterLabel ? (c: { dataIndex: number }) => opts.afterLabel!(c.dataIndex) : undefined,
           },
         },
       },
@@ -196,12 +202,20 @@
       } as never);
     } else if (view === "byposition") {
       if (!activePosition || activePosition.series.length === 0) return;
-      const values = activePosition.series.map((p) => p.value);
-      const labels = activePosition.series.map((p) => fmtDay(p.date));
+      const series = activePosition.series;
+      const values = series.map((p) => p.value);
+      const labels = series.map((p) => fmtDay(p.date));
       chart = new ChartCtor(canvas, {
         type: "line",
         data: { labels, datasets: [moneySeriesDataset(values, CHART_H, ctx)] },
-        options: baseOptions({ yTickFmt: compactFmt, tooltipFmt: (v) => fmtMoney(v, currency) }),
+        options: baseOptions({
+          yTickFmt: compactFmt,
+          tooltipFmt: (v) => fmtMoney(v, currency),
+          afterLabel: (i) => [
+            `Open: ${fmtPriceLike(series[i].open, currency, 2)}`,
+            `Close: ${fmtPriceLike(series[i].close, currency, 2)}`,
+          ],
+        }),
       } as never);
     } else if (view === "daily") {
       if (combinedSeries.length < 2) return;

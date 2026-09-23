@@ -9,6 +9,7 @@ page, matching how the rest of the app treats optional data.
 from __future__ import annotations
 
 import asyncio
+import math
 from datetime import date, timedelta
 from typing import Callable
 
@@ -29,12 +30,40 @@ def plain_ticker(symbol: str) -> str:
     return symbol[:-1] if symbol.endswith("n") else symbol
 
 
+def _patch_todays_bar(t: yf.Ticker, bar: OHLCVBar) -> OHLCVBar:
+    """`.history()`'s row for today comes back all-NaN while the session is
+    still open -- Yahoo hasn't settled a daily close yet, only ticked a live
+    quote. `fast_info` is a separate, lighter-weight endpoint that does have
+    live values mid-session (today's open, high/low so far, last trade,
+    volume so far), so it fills in that one row instead of leaving it NaN --
+    which callers already have to skip past for their day-by-day math (see
+    the frontend's own `typeof bar.close !== "number"` guard), and which
+    otherwise means a position's current price and today's Unrealized P&L
+    just come back blank until Yahoo backfills the real close overnight.
+    Falls back to the NaN bar unchanged if `fast_info` itself has nothing --
+    an unrecognized or delisted ticker, or Yahoo hiccuping on that call too.
+    """
+    try:
+        fi = t.fast_info
+        return OHLCVBar(
+            time=bar.time,
+            open=float(fi.open),
+            high=float(fi.day_high),
+            low=float(fi.day_low),
+            close=float(fi.last_price),
+            volume=int(fi.last_volume),
+        )
+    except Exception:
+        return bar
+
+
 def _fetch_history(ticker: str, lookback_days: int) -> list[OHLCVBar]:
     """Runs in a worker thread -- yfinance does blocking HTTP under the hood."""
     end = date.today() + timedelta(days=1)  # yfinance's `end` is exclusive
     start = end - timedelta(days=lookback_days)
-    history = yf.Ticker(ticker).history(start=start, end=end, interval="1d")
-    return [
+    t = yf.Ticker(ticker)
+    history = t.history(start=start, end=end, interval="1d")
+    bars = [
         OHLCVBar(
             time=idx.date(),
             open=float(row["Open"]),
@@ -45,6 +74,9 @@ def _fetch_history(ticker: str, lookback_days: int) -> list[OHLCVBar]:
         )
         for idx, row in history.iterrows()
     ]
+    if bars and math.isnan(bars[-1].close):
+        bars[-1] = _patch_todays_bar(t, bars[-1])
+    return bars
 
 
 async def fetch_ohlcv(

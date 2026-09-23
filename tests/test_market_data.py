@@ -3,10 +3,12 @@ that would otherwise fail silently or send the wrong ticker to Yahoo
 Finance."""
 
 import asyncio
+import math
 from datetime import date
+from types import SimpleNamespace
 
 from ibkr_pnl.models import OHLCVBar
-from ibkr_pnl.sources.market_data import fetch_ohlcv, plain_ticker
+from ibkr_pnl.sources.market_data import _patch_todays_bar, fetch_ohlcv, plain_ticker
 
 
 def test_plain_ticker_strips_the_cfd_suffix():
@@ -51,6 +53,39 @@ def test_fetch_ohlcv_parses_a_successful_response():
     assert result.symbol == "ARM"
     assert len(result.bars) == 2
     assert result.bars[-1].close == 247.4
+
+
+def _nan_bar(day: date) -> OHLCVBar:
+    return OHLCVBar(time=day, open=math.nan, high=math.nan, low=math.nan, close=math.nan, volume=0)
+
+
+def test_patch_todays_bar_fills_in_from_fast_info_when_close_is_nan():
+    """`.history()`'s row for a session still in progress comes back all-NaN
+    -- `fast_info` is the live-quote fallback that has real numbers mid-day."""
+    fake_ticker = SimpleNamespace(
+        fast_info=SimpleNamespace(open=176.09, day_high=176.09, day_low=170.24, last_price=174.26, last_volume=4_113_380)
+    )
+    patched = _patch_todays_bar(fake_ticker, _nan_bar(date(2026, 9, 22)))
+    assert patched.time == date(2026, 9, 22)
+    assert patched.open == 176.09
+    assert patched.high == 176.09
+    assert patched.low == 170.24
+    assert patched.close == 174.26
+    assert patched.volume == 4_113_380
+
+
+def test_patch_todays_bar_falls_back_to_the_nan_bar_when_fast_info_has_nothing():
+    """An unrecognized ticker, or Yahoo hiccuping on this call too, must not
+    raise -- the caller already treats a NaN close as "no data for today"."""
+
+    class BrokenFastInfo:
+        @property
+        def fast_info(self):
+            raise RuntimeError("no data")
+
+    nan_bar = _nan_bar(date(2026, 9, 22))
+    patched = _patch_todays_bar(BrokenFastInfo(), nan_bar)
+    assert patched is nan_bar
 
 
 def test_fetch_ohlcv_treats_an_empty_series_as_not_ok():

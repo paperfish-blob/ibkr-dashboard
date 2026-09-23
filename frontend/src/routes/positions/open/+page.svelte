@@ -178,6 +178,8 @@
   interface DayPoint {
     date: string;
     value: number;
+    open: number;
+    close: number;
   }
   function potentialPnlSeries(p: Position, bars: OHLCVBar[]): DayPoint[] {
     const events = [
@@ -218,7 +220,20 @@
         }
         ei += 1;
       }
-      out.push({ date: bar.time, value: realizedSoFar + (bar.close - avgCost) * qty * dirSign });
+      // A bar still forming intraday (today, before the close print) comes
+      // back with OHLC all null and only volume ticking -- skip emitting a
+      // point for it rather than let `null - avgCost` silently coerce to
+      // `-avgCost`, which reads as "this position lost its entire cost
+      // basis today." Events for this date are already applied above, so
+      // qty/avgCost/realizedSoFar stay correct for the next bar that does
+      // have a close.
+      if (typeof bar.close !== "number") continue;
+      out.push({
+        date: bar.time,
+        value: realizedSoFar + (bar.close - avgCost) * qty * dirSign,
+        open: bar.open,
+        close: bar.close,
+      });
     }
     return out;
   }
