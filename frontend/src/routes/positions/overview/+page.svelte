@@ -17,6 +17,7 @@
   import SegToggle from "$lib/components/SegToggle.svelte";
   import PositionHeadlineStat from "$lib/components/PositionHeadlineStat.svelte";
   import CumulativeChart from "$lib/components/CumulativeChart.svelte";
+  import OpenPositionCountPanel from "$lib/components/OpenPositionCountPanel.svelte";
   import MonthlyPnL from "$lib/components/MonthlyPnL.svelte";
   import IndexBenchmark from "$lib/components/IndexBenchmark.svelte";
   import TopPositions from "$lib/components/TopPositions.svelte";
@@ -337,6 +338,8 @@
     <PositionHeadlineStat data={$positions} groupBy={$posGroupBy} {currency} />
     <div class="gap"></div>
     <CumulativeChart {series} {currency} caption={cumCaption} />
+    <div class="gap"></div>
+    <OpenPositionCountPanel positions={$positions.positions} />
     <div class="gap"></div>
     <div class="side-grid">
       <MonthlyPnL

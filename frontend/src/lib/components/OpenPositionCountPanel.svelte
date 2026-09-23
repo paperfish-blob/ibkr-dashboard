@@ -1,11 +1,14 @@
 <script lang="ts">
   /**
-   * How many positions were open at once, day by day -- across every
-   * position in the current period (open AND closed), not just what's
-   * open right now, so a stretch of overlapping positions still shows up
-   * long after they've all since closed. A carry-in (unknown open date)
-   * or a cash balance is excluded, same as Open Positions does, since
-   * neither has a real "opened on this day" to place on the timeline.
+   * How many of the given positions were open at once, day by day. The
+   * caller decides what "the given positions" means: Positions Overview
+   * passes every position in the current period, open AND closed, so a
+   * stretch of overlapping positions still shows up long after they've
+   * all since closed; Open Positions passes only what's open today (under
+   * its own "From year" floor), so this instead traces how today's actual
+   * holdings built up. Either way, a carry-in (unknown open date) or a
+   * cash balance is excluded, since neither has a real "opened on this
+   * day" to place on the timeline.
    *
    * Split into two stacked layers around a fixed comfort threshold (a
    * starting placeholder, not yet a user setting) so the excess above it
@@ -13,6 +16,14 @@
    * one-line callout naming which symbols overlapped on the single worst
    * day -- "you overtraded in June" is a lot less useful than knowing
    * which positions actually did it.
+   *
+   * A second, smaller chart underneath answers a different question:
+   * concurrency (above) is a level, this is a flow -- how many positions
+   * were newly opened on a given day, volume-strip style under the main
+   * chart, sharing the same day-by-day x-axis so a tall bar down here and
+   * a step up above line up visually. A burst of same-day opens is the
+   * thing that actually drives overtrading, and it can show up here even
+   * on a day the running total above wasn't at its own peak yet.
    */
   import { onMount, onDestroy } from "svelte";
   import type { Chart as ChartType } from "chart.js";
@@ -25,6 +36,7 @@
   let { positions }: Props = $props();
 
   const COMFORT_THRESHOLD = 3;
+  const NEW_OPEN_THRESHOLD = 2;
 
   function cssVar(name: string): string {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -40,6 +52,18 @@
     const d = parseISODay(iso);
     d.setDate(d.getDate() + n);
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+  }
+  // The same symbol can legitimately appear more than once in a day's list
+  // (e.g. TSLA opened, closed, and opened again as a separate round trip) --
+  // collapsed to "SYM ×N" instead of repeating the name N times.
+  function formatSymbolCounts(symbols: string[]): string {
+    const counts = new Map<string, number>();
+    const order: string[] = [];
+    for (const s of symbols) {
+      if (!counts.has(s)) order.push(s);
+      counts.set(s, (counts.get(s) ?? 0) + 1);
+    }
+    return order.map((s) => (counts.get(s)! > 1 ? `${s} ×${counts.get(s)}` : s)).join(", ");
   }
 
   interface DayCount {
@@ -93,11 +117,36 @@
     for (const pt of series) if (pt.count > best.count) best = pt;
     if (best.count <= COMFORT_THRESHOLD) return null;
     const symbols = spans.filter((s) => s.start <= best.date && best.date <= s.end).map((s) => s.symbol);
-    return { date: best.date, count: best.count, symbols };
+    return { date: best.date, count: best.count, symbolsLabel: formatSymbolCounts(symbols) };
+  });
+
+  // symbol(s) newly opened on each date -- a position's own open_date is
+  // already exactly "the day it was newly opened," no separate event log
+  // needed.
+  const newOpensByDate = $derived.by(() => {
+    const m = new Map<string, string[]>();
+    for (const s of spans) m.set(s.start, [...(m.get(s.start) ?? []), s.symbol]);
+    return m;
+  });
+  const newOpenCounts = $derived(series.map((pt) => newOpensByDate.get(pt.date)?.length ?? 0));
+
+  const busiestNewOpenDay = $derived.by(() => {
+    let bestDate: string | null = null;
+    let bestSymbols: string[] = [];
+    for (const [date, symbols] of newOpensByDate) {
+      if (symbols.length > bestSymbols.length) {
+        bestDate = date;
+        bestSymbols = symbols;
+      }
+    }
+    if (!bestDate || bestSymbols.length <= 1) return null;
+    return { date: bestDate, count: bestSymbols.length, symbolsLabel: formatSymbolCounts(bestSymbols) };
   });
 
   let canvas = $state<HTMLCanvasElement | null>(null);
   let chart: ChartType | null = null;
+  let newOpensCanvas = $state<HTMLCanvasElement | null>(null);
+  let newOpensChart: ChartType | null = null;
   let ChartCtor: typeof ChartType | null = null;
   let chartReady = $state(false);
 
@@ -183,20 +232,118 @@
     } as never);
   }
 
+  function buildNewOpensChart() {
+    if (!newOpensCanvas || !ChartCtor || series.length === 0) return;
+    const ctx = newOpensCanvas.getContext("2d");
+    if (!ctx) return;
+    newOpensChart?.destroy();
+
+    const labels = series.map((pt) => fmtDay(pt.date));
+    const normal = cssVar("--accent");
+    const above = cssVar("--amber");
+
+    newOpensChart = new ChartCtor(newOpensCanvas, {
+      type: "bar",
+      data: {
+        labels,
+        datasets: [
+          {
+            data: newOpenCounts,
+            backgroundColor: newOpenCounts.map((c) => (c > NEW_OPEN_THRESHOLD ? above : normal)),
+            borderRadius: 1.5,
+            barPercentage: 0.85,
+            categoryPercentage: 0.9,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: { duration: 300, easing: "easeInOutQuart" },
+        interaction: { mode: "index", intersect: false },
+        layout: { padding: { top: 2, right: 4, bottom: 0, left: 0 } },
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            backgroundColor: cssVar("--surface"),
+            titleColor: toRgba("--ink-rgb", 0.5),
+            bodyColor: cssVar("--ink"),
+            borderColor: toRgba("--ink-rgb", 0.12),
+            borderWidth: 1,
+            padding: 10,
+            cornerRadius: 6,
+            displayColors: false,
+            callbacks: {
+              label: (c: { dataIndex: number }) => {
+                const syms = newOpensByDate.get(series[c.dataIndex].date);
+                return syms?.length
+                  ? `${syms.length} new: ${formatSymbolCounts(syms)}`
+                  : "No new positions";
+              },
+            },
+          },
+        },
+        scales: {
+          x: {
+            grid: { display: false },
+            border: { color: "transparent" },
+            ticks: { display: false },
+          },
+          y: {
+            position: "right" as const,
+            beginAtZero: true,
+            grid: { display: false },
+            border: { color: "transparent" },
+            ticks: { display: false },
+          },
+        },
+      },
+    } as never);
+  }
+
   $effect(() => {
     void series;
-    if (chartReady) buildChart();
+    void newOpenCounts;
+    if (chartReady) {
+      buildChart();
+      buildNewOpensChart();
+    }
   });
 
   onMount(async () => {
-    const { Chart, LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Legend, Tooltip } =
-      await import("chart.js");
-    Chart.register(LineController, LineElement, PointElement, LinearScale, CategoryScale, Filler, Legend, Tooltip);
+    const {
+      Chart,
+      LineController,
+      LineElement,
+      PointElement,
+      BarController,
+      BarElement,
+      LinearScale,
+      CategoryScale,
+      Filler,
+      Legend,
+      Tooltip,
+    } = await import("chart.js");
+    Chart.register(
+      LineController,
+      LineElement,
+      PointElement,
+      BarController,
+      BarElement,
+      LinearScale,
+      CategoryScale,
+      Filler,
+      Legend,
+      Tooltip,
+    );
     ChartCtor = Chart;
     chartReady = true;
   });
 
-  onDestroy(() => chart?.destroy());
+  onDestroy(() => {
+    chart?.destroy();
+    newOpensChart?.destroy();
+  });
 </script>
 
 <div class="panel">
@@ -217,9 +364,18 @@
       <div class="chart-box">
         <canvas bind:this={canvas}></canvas>
       </div>
+      <div class="sub-label">New positions opened, per day</div>
+      <div class="sub-chart-box">
+        <canvas bind:this={newOpensCanvas}></canvas>
+      </div>
       {#if peak}
         <div class="callout">
-          <b>{peak.count} concurrent</b> on {fmtFullDate(peak.date)} &mdash; {peak.symbols.join(", ")}
+          <b>{peak.count} concurrent</b> on {fmtFullDate(peak.date)} &mdash; {peak.symbolsLabel}
+        </div>
+      {/if}
+      {#if busiestNewOpenDay}
+        <div class="callout accent">
+          <b>{busiestNewOpenDay.count} positions opened</b> on {fmtFullDate(busiestNewOpenDay.date)} &mdash; {busiestNewOpenDay.symbolsLabel}
         </div>
       {/if}
     {/if}
@@ -268,6 +424,21 @@
     position: relative;
     height: 220px;
   }
+  .sub-label {
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--dim-45);
+    margin-top: 6px;
+    padding-top: 6px;
+    border-top: 1px dashed var(--border-05);
+  }
+  .sub-chart-box {
+    position: relative;
+    height: 60px;
+    margin-top: 6px;
+  }
   .empty {
     color: var(--dim-55);
     text-align: center;
@@ -285,5 +456,13 @@
   }
   .callout b {
     color: var(--amber);
+  }
+  .callout.accent {
+    background: var(--accent-bg);
+    border-color: rgba(91, 108, 255, 0.16);
+    margin-top: 8px;
+  }
+  .callout.accent b {
+    color: var(--accent);
   }
 </style>

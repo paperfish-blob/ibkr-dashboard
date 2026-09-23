@@ -106,16 +106,6 @@
   );
   const hiddenByFromYear = $derived(openPositions.length - yearFilteredPositions.length);
 
-  // Every position, open OR closed, excluding the same carry-in/cash cases
-  // and under the same "From year" floor as everything else on this page --
-  // for the concurrency panel below, which needs a position's whole life
-  // span (including ones already closed) to count overlaps correctly, not
-  // just what's open today.
-  const allPositionsFiltered = $derived.by(() => {
-    const all = ($positions?.positions ?? []).filter((p) => !p.is_carry_in && p.asset_category !== "CASH");
-    return effectiveFromYear === "all" ? all : all.filter((p) => p.open_date && p.open_date.slice(0, 4) >= effectiveFromYear);
-  });
-
   // Full daily history per distinct symbol, back to that position's own
   // open date (not just a handful of recent days) -- needed for the
   // potential-P&L-over-time chart below, and its last bar doubles as the
@@ -383,7 +373,7 @@
         <PotentialPnlPanel positions={positionSeries} {combinedSeries} {currency} />
         <div class="gap"></div>
       {/if}
-      <OpenPositionCountPanel positions={allPositionsFiltered} />
+      <OpenPositionCountPanel positions={yearFilteredPositions} />
       <div class="gap"></div>
       <OpenPositionsList {rows} {currency} />
     {/if}
