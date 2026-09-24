@@ -1,14 +1,16 @@
 <script lang="ts">
   /**
-   * Headline panel for the Open Positions page -- three equal-weight stat
-   * tiles (Unrealized P&L, Total Cost Basis, Total Open) rather than one
-   * hero number with the rest demoted to a small side panel, so Cost Basis
-   * and the open count get the same visual attention as P&L does.
+   * Headline panel for the Open Positions page -- four equal-weight stat
+   * tiles (Unrealized P&L, Partial Realised P&L, Total Cost Basis, Total
+   * Open) rather than one hero number with the rest demoted to a small
+   * side panel, so Cost Basis and the open count get the same visual
+   * attention as P&L does.
    */
   import { fmtMoney, toneOf } from "$lib/format";
 
   interface Props {
     totalUnrealized: number;
+    totalPartialRealized: number;
     totalCost: number;
     openCount: number;
     fullCount: number;
@@ -16,8 +18,16 @@
     carryInExcluded: number;
     currency?: string;
   }
-  let { totalUnrealized, totalCost, openCount, fullCount, partialCount, carryInExcluded, currency = "USD" }: Props =
-    $props();
+  let {
+    totalUnrealized,
+    totalPartialRealized,
+    totalCost,
+    openCount,
+    fullCount,
+    partialCount,
+    carryInExcluded,
+    currency = "USD",
+  }: Props = $props();
 </script>
 
 <div class="panel">
@@ -25,6 +35,18 @@
     <div class="eyebrow">Unrealized P&amp;L</div>
     <div class="big {toneOf(totalUnrealized)}">{fmtMoney(totalUnrealized, currency)}</div>
     <div class="kicker">Mark-to-market, latest close</div>
+  </div>
+
+  <div class="tile">
+    <div class="eyebrow">Partial Realised P&amp;L</div>
+    <div class="big {toneOf(totalPartialRealized)}">{fmtMoney(totalPartialRealized, currency)}</div>
+    <div class="kicker">
+      {#if partialCount > 0}
+        Locked in on exits already taken &middot; {partialCount} partial position{partialCount === 1 ? "" : "s"}
+      {:else}
+        No partial exits yet
+      {/if}
+    </div>
   </div>
 
   <div class="tile">
@@ -50,7 +72,7 @@
 <style>
   .panel {
     display: grid;
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(4, 1fr);
     background: var(--surface);
     border: 1px solid var(--border-05);
     border-radius: var(--radius-lg);

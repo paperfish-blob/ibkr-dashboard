@@ -161,6 +161,7 @@
 
   const rows = $derived(yearFilteredPositions.map(toRow));
   const totalUnrealized = $derived(rows.reduce((sum, r) => sum + (r.unrealized ?? 0), 0));
+  const totalPartialRealized = $derived(rows.reduce((sum, r) => sum + (r.interim ?? 0), 0));
   const totalCost = $derived(rows.reduce((sum, r) => sum + r.costBasis, 0));
   const fullCount = $derived(rows.filter((r) => r.status === "full").length);
   const partialCount = $derived(rows.filter((r) => r.status === "partial").length);
@@ -361,6 +362,7 @@
     {:else}
       <OpenPositionsSummary
         {totalUnrealized}
+        {totalPartialRealized}
         {totalCost}
         openCount={rows.length}
         {fullCount}
