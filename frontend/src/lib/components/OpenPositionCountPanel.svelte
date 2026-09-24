@@ -267,8 +267,13 @@
 
   let canvas = $state<HTMLCanvasElement | null>(null);
   let chart: ChartType | null = null;
+  // The chart's own tooltip callbacks read these rather than closing over
+  // `view`/`counts` at creation time -- once a chart is updated in place
+  // (see below) rather than rebuilt, a closed-over array would go stale.
+  let chartView: DayCount[] = [];
   let newOpensCanvas = $state<HTMLCanvasElement | null>(null);
   let newOpensChart: ChartType | null = null;
+  let newOpensView: DayCount[] = [];
   let ChartCtor: typeof ChartType | null = null;
   let chartReady = $state(false);
 
@@ -276,12 +281,24 @@
     if (!canvas || !ChartCtor || windowedSeries.length === 0) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
-    chart?.destroy();
 
-    const view = windowedSeries;
-    const labels = view.map((pt) => fmtDay(pt.date));
-    const within = view.map((pt) => Math.min(pt.count, COMFORT_THRESHOLD));
-    const total = view.map((pt) => pt.count);
+    chartView = windowedSeries;
+    const labels = chartView.map((pt) => fmtDay(pt.date));
+    const within = chartView.map((pt) => Math.min(pt.count, COMFORT_THRESHOLD));
+    const total = chartView.map((pt) => pt.count);
+
+    // A zoom/pan drag fires this on every mousemove -- destroying and
+    // recreating the chart each time (each with its own fade-in) is what
+    // produced the blank-then-redraw flash. An already-built chart just
+    // gets its data swapped and a no-animation update instead; only the
+    // very first build (or a canvas remount) goes through full creation.
+    if (chart) {
+      chart.data.labels = labels;
+      chart.data.datasets[0].data = within;
+      chart.data.datasets[1].data = total;
+      chart.update("none");
+      return;
+    }
 
     chart = new ChartCtor(canvas, {
       type: "line",
@@ -333,7 +350,7 @@
             displayColors: false,
             filter: (c: { datasetIndex: number }) => c.datasetIndex === 1,
             callbacks: {
-              label: (c: { dataIndex: number }) => `Open that day: ${view[c.dataIndex].count}`,
+              label: (c: { dataIndex: number }) => `Open that day: ${chartView[c.dataIndex].count}`,
             },
           },
         },
@@ -359,13 +376,20 @@
     if (!newOpensCanvas || !ChartCtor || windowedSeries.length === 0) return;
     const ctx = newOpensCanvas.getContext("2d");
     if (!ctx) return;
-    newOpensChart?.destroy();
 
-    const view = windowedSeries;
+    newOpensView = windowedSeries;
     const counts = windowedNewOpenCounts;
-    const labels = view.map((pt) => fmtDay(pt.date));
+    const labels = newOpensView.map((pt) => fmtDay(pt.date));
     const normal = cssVar("--accent");
     const above = cssVar("--amber");
+
+    if (newOpensChart) {
+      newOpensChart.data.labels = labels;
+      newOpensChart.data.datasets[0].data = counts;
+      newOpensChart.data.datasets[0].backgroundColor = counts.map((c) => (c > NEW_OPEN_THRESHOLD ? above : normal));
+      newOpensChart.update("none");
+      return;
+    }
 
     newOpensChart = new ChartCtor(newOpensCanvas, {
       type: "bar",
@@ -400,7 +424,7 @@
             displayColors: false,
             callbacks: {
               label: (c: { dataIndex: number }) => {
-                const syms = newOpensByDate.get(view[c.dataIndex].date);
+                const syms = newOpensByDate.get(newOpensView[c.dataIndex].date);
                 return syms?.length
                   ? `${syms.length} new: ${formatSymbolCounts(syms)}`
                   : "No new positions";
