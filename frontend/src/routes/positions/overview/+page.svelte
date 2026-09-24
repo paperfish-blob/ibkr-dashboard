@@ -339,7 +339,7 @@
     <div class="gap"></div>
     <CumulativeChart {series} {currency} caption={cumCaption} />
     <div class="gap"></div>
-    <OpenPositionCountPanel positions={$positions.positions} />
+    <OpenPositionCountPanel positions={$positions.positions} showRangeSelector />
     <div class="gap"></div>
     <div class="side-grid">
       <MonthlyPnL

@@ -24,6 +24,15 @@
    * a step up above line up visually. A burst of same-day opens is the
    * thing that actually drives overtrading, and it can show up here even
    * on a day the running total above wasn't at its own peak yet.
+   *
+   * `showRangeSelector` (Positions Overview only -- Open Positions' own
+   * window is already just a handful of days, too short for this to help)
+   * adds a compressed overview strip below both charts, same drag-to-pan/
+   * drag-edges-to-resize pattern Streak Flow already has: both charts
+   * above zoom to whatever the selection window currently covers, while
+   * the peak-day and busiest-new-open-day callouts keep reading the whole
+   * period regardless of zoom, since those are facts about the account,
+   * not about whatever's currently in view.
    */
   import { onMount, onDestroy } from "svelte";
   import type { Chart as ChartType } from "chart.js";
@@ -32,11 +41,13 @@
 
   interface Props {
     positions: Position[];
+    showRangeSelector?: boolean;
   }
-  let { positions }: Props = $props();
+  let { positions, showRangeSelector = false }: Props = $props();
 
   const COMFORT_THRESHOLD = 3;
   const NEW_OPEN_THRESHOLD = 2;
+  const DEFAULT_WINDOW_DAYS = 90;
 
   function cssVar(name: string): string {
     return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
@@ -128,8 +139,6 @@
     for (const s of spans) m.set(s.start, [...(m.get(s.start) ?? []), s.symbol]);
     return m;
   });
-  const newOpenCounts = $derived(series.map((pt) => newOpensByDate.get(pt.date)?.length ?? 0));
-
   const busiestNewOpenDay = $derived.by(() => {
     let bestDate: string | null = null;
     let bestSymbols: string[] = [];
@@ -143,6 +152,119 @@
     return { date: bestDate, count: bestSymbols.length, symbolsLabel: formatSymbolCounts(bestSymbols) };
   });
 
+  // Selection window, as fractions of the full `series` -- defaults to the
+  // trailing DEFAULT_WINDOW_DAYS (not the full range) whenever the
+  // underlying data actually changes (a new `series` reference only happens
+  // from a `positions` prop change, e.g. switching Period; dragging never
+  // touches `series` itself). A full-width default would leave nothing for
+  // the pan handle to do -- both edges are already at the boundary, so
+  // there's no room to drag until the user first shrinks it manually.
+  // Short histories that don't exceed the window just show everything.
+  let selStart = $state(0);
+  let selEnd = $state(1);
+  $effect(() => {
+    const n = series.length;
+    if (n > DEFAULT_WINDOW_DAYS) {
+      selStart = 1 - DEFAULT_WINDOW_DAYS / n;
+      selEnd = 1;
+    } else {
+      selStart = 0;
+      selEnd = 1;
+    }
+  });
+
+  const windowedSeries = $derived.by((): DayCount[] => {
+    if (!showRangeSelector || series.length === 0) return series;
+    const n = series.length;
+    const startIdx = Math.max(0, Math.min(n - 1, Math.floor(selStart * n)));
+    const endIdx = Math.max(startIdx + 1, Math.min(n, Math.ceil(selEnd * n)));
+    return series.slice(startIdx, endIdx);
+  });
+  const windowedNewOpenCounts = $derived(
+    windowedSeries.map((pt) => newOpensByDate.get(pt.date)?.length ?? 0),
+  );
+
+  // A hand-drawn step path (not Chart.js) for the compressed overview strip
+  // -- cheap, and matches Streak Flow's own minimap, which is also plain
+  // SVG rather than a second full chart instance.
+  function stepPath(values: number[], w: number, h: number, padTop: number, padBot: number, maxVal: number): string {
+    if (values.length === 0) return "";
+    const barW = w / values.length;
+    const yOf = (v: number) => padTop + (1 - v / maxVal) * (h - padTop - padBot);
+    const pts: [number, number][] = [];
+    values.forEach((v, i) => {
+      const y = yOf(v);
+      pts.push([i * barW, y]);
+      pts.push([(i + 1) * barW, y]);
+    });
+    return "M" + pts.map(([x, y]) => `${x.toFixed(1)},${y.toFixed(1)}`).join(" L");
+  }
+
+  const MINI_W = 1180;
+  const MINI_H = 56;
+  const miniShape = $derived.by(() => {
+    if (!showRangeSelector || series.length === 0) return null;
+    const maxVal = Math.max(COMFORT_THRESHOLD, ...series.map((pt) => pt.count));
+    const within = series.map((pt) => Math.min(pt.count, COMFORT_THRESHOLD));
+    const total = series.map((pt) => pt.count);
+    const withinPath = stepPath(within, MINI_W, MINI_H, 2, 4, maxVal);
+    const totalPath = stepPath(total, MINI_W, MINI_H, 2, 4, maxVal);
+    const baseline = 2 + (MINI_H - 2 - 4);
+    return {
+      withinPath,
+      totalPath,
+      withinFill: `${withinPath} L${MINI_W},${baseline} L0,${baseline} Z`,
+      selX: selStart * MINI_W,
+      selW: Math.max(6, (selEnd - selStart) * MINI_W),
+    };
+  });
+
+  let miniSvg = $state<SVGSVGElement | null>(null);
+  let dragMode: "pan" | "left" | "right" | null = null;
+  let dragOriginX = 0;
+  let dragOrigStart = 0;
+  let dragOrigEnd = 0;
+
+  function startDrag(mode: "pan" | "left" | "right", e: MouseEvent) {
+    e.preventDefault();
+    dragMode = mode;
+    dragOriginX = e.clientX;
+    dragOrigStart = selStart;
+    dragOrigEnd = selEnd;
+    window.addEventListener("mousemove", handleDragMove);
+    window.addEventListener("mouseup", endDrag);
+  }
+  function handleDragMove(e: MouseEvent) {
+    if (!dragMode || !miniSvg) return;
+    const rect = miniSvg.getBoundingClientRect();
+    const dx = (e.clientX - dragOriginX) / rect.width;
+    const clamp = (v: number) => Math.max(0, Math.min(1, v));
+    if (dragMode === "pan") {
+      const width = dragOrigEnd - dragOrigStart;
+      let ns = dragOrigStart + dx;
+      let ne = dragOrigEnd + dx;
+      if (ns < 0) {
+        ns = 0;
+        ne = width;
+      }
+      if (ne > 1) {
+        ne = 1;
+        ns = 1 - width;
+      }
+      selStart = clamp(ns);
+      selEnd = clamp(ne);
+    } else if (dragMode === "left") {
+      selStart = Math.min(clamp(dragOrigStart + dx), selEnd - 0.02);
+    } else if (dragMode === "right") {
+      selEnd = Math.max(clamp(dragOrigEnd + dx), selStart + 0.02);
+    }
+  }
+  function endDrag() {
+    dragMode = null;
+    window.removeEventListener("mousemove", handleDragMove);
+    window.removeEventListener("mouseup", endDrag);
+  }
+
   let canvas = $state<HTMLCanvasElement | null>(null);
   let chart: ChartType | null = null;
   let newOpensCanvas = $state<HTMLCanvasElement | null>(null);
@@ -151,14 +273,15 @@
   let chartReady = $state(false);
 
   function buildChart() {
-    if (!canvas || !ChartCtor || series.length === 0) return;
+    if (!canvas || !ChartCtor || windowedSeries.length === 0) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     chart?.destroy();
 
-    const labels = series.map((pt) => fmtDay(pt.date));
-    const within = series.map((pt) => Math.min(pt.count, COMFORT_THRESHOLD));
-    const total = series.map((pt) => pt.count);
+    const view = windowedSeries;
+    const labels = view.map((pt) => fmtDay(pt.date));
+    const within = view.map((pt) => Math.min(pt.count, COMFORT_THRESHOLD));
+    const total = view.map((pt) => pt.count);
 
     chart = new ChartCtor(canvas, {
       type: "line",
@@ -210,7 +333,7 @@
             displayColors: false,
             filter: (c: { datasetIndex: number }) => c.datasetIndex === 1,
             callbacks: {
-              label: (c: { dataIndex: number }) => `Open that day: ${series[c.dataIndex].count}`,
+              label: (c: { dataIndex: number }) => `Open that day: ${view[c.dataIndex].count}`,
             },
           },
         },
@@ -233,12 +356,14 @@
   }
 
   function buildNewOpensChart() {
-    if (!newOpensCanvas || !ChartCtor || series.length === 0) return;
+    if (!newOpensCanvas || !ChartCtor || windowedSeries.length === 0) return;
     const ctx = newOpensCanvas.getContext("2d");
     if (!ctx) return;
     newOpensChart?.destroy();
 
-    const labels = series.map((pt) => fmtDay(pt.date));
+    const view = windowedSeries;
+    const counts = windowedNewOpenCounts;
+    const labels = view.map((pt) => fmtDay(pt.date));
     const normal = cssVar("--accent");
     const above = cssVar("--amber");
 
@@ -248,8 +373,8 @@
         labels,
         datasets: [
           {
-            data: newOpenCounts,
-            backgroundColor: newOpenCounts.map((c) => (c > NEW_OPEN_THRESHOLD ? above : normal)),
+            data: counts,
+            backgroundColor: counts.map((c) => (c > NEW_OPEN_THRESHOLD ? above : normal)),
             borderRadius: 1.5,
             barPercentage: 0.85,
             categoryPercentage: 0.9,
@@ -275,7 +400,7 @@
             displayColors: false,
             callbacks: {
               label: (c: { dataIndex: number }) => {
-                const syms = newOpensByDate.get(series[c.dataIndex].date);
+                const syms = newOpensByDate.get(view[c.dataIndex].date);
                 return syms?.length
                   ? `${syms.length} new: ${formatSymbolCounts(syms)}`
                   : "No new positions";
@@ -302,8 +427,8 @@
   }
 
   $effect(() => {
-    void series;
-    void newOpenCounts;
+    void windowedSeries;
+    void windowedNewOpenCounts;
     if (chartReady) {
       buildChart();
       buildNewOpensChart();
@@ -343,6 +468,8 @@
   onDestroy(() => {
     chart?.destroy();
     newOpensChart?.destroy();
+    window.removeEventListener("mousemove", handleDragMove);
+    window.removeEventListener("mouseup", endDrag);
   });
 </script>
 
@@ -356,6 +483,9 @@
         amber = the excess above it
       </div>
     </div>
+    {#if showRangeSelector && windowedSeries.length > 0 && windowedSeries.length < series.length}
+      <div class="range-pill">{windowedSeries.length} of {series.length} days</div>
+    {/if}
   </div>
   <div class="body">
     {#if series.length === 0}
@@ -368,6 +498,43 @@
       <div class="sub-chart-box">
         <canvas bind:this={newOpensCanvas}></canvas>
       </div>
+      {#if showRangeSelector && miniShape}
+        <div class="mini-label">Drag to explore &middot; full period</div>
+        <div class="mini-wrap">
+          <svg bind:this={miniSvg} viewBox="0 0 {MINI_W} {MINI_H}" preserveAspectRatio="none">
+            <path d={miniShape.withinFill} fill="var(--accent)" fill-opacity="0.3" stroke="none" />
+            <path d={miniShape.withinPath} fill="none" stroke="var(--accent)" stroke-width="1" />
+            <path d={miniShape.totalPath} fill="none" stroke="var(--amber)" stroke-width="1" />
+            <rect
+              x={miniShape.selX}
+              y="1"
+              width={miniShape.selW}
+              height={MINI_H - 2}
+              rx="4"
+              class="mini-selection"
+              onmousedown={(e) => startDrag("pan", e)}
+            />
+            <rect
+              x={miniShape.selX}
+              y="1"
+              width="6"
+              height={MINI_H - 2}
+              rx="2"
+              class="mini-handle"
+              onmousedown={(e) => startDrag("left", e)}
+            />
+            <rect
+              x={Math.max(6, miniShape.selX + miniShape.selW - 6)}
+              y="1"
+              width="6"
+              height={MINI_H - 2}
+              rx="2"
+              class="mini-handle"
+              onmousedown={(e) => startDrag("right", e)}
+            />
+          </svg>
+        </div>
+      {/if}
       {#if peak}
         <div class="callout">
           <b>{peak.count} concurrent</b> on {fmtFullDate(peak.date)} &mdash; {peak.symbolsLabel}
@@ -392,6 +559,20 @@
   .hd {
     padding: 14px 22px;
     border-bottom: 1px solid var(--border-05);
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+  }
+  .range-pill {
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-bold);
+    color: var(--accent);
+    background: var(--accent-bg);
+    padding: 4px 10px;
+    border-radius: var(--radius-pill);
+    white-space: nowrap;
+    flex-shrink: 0;
   }
   .hd-left {
     display: flex;
@@ -438,6 +619,35 @@
     position: relative;
     height: 60px;
     margin-top: 6px;
+  }
+  .mini-label {
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--dim-45);
+    margin-top: 12px;
+    padding-top: 10px;
+    border-top: 1px dashed var(--border-05);
+    margin-bottom: 6px;
+  }
+  .mini-wrap svg {
+    display: block;
+    width: 100%;
+    height: 56px;
+  }
+  .mini-selection {
+    fill: var(--accent-bg);
+    stroke: var(--accent);
+    stroke-width: 1.5;
+    cursor: grab;
+  }
+  .mini-selection:active {
+    cursor: grabbing;
+  }
+  .mini-handle {
+    fill: var(--accent);
+    cursor: ew-resize;
   }
   .empty {
     color: var(--dim-55);
