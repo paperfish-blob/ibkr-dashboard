@@ -242,6 +242,48 @@ export interface MarketDataResult {
   error: string;
 }
 
+/** What GET /api/market-data/company-info returns. `ok: false` is the normal
+ *  state whenever Finviz doesn't cover the symbol -- expected, not an error
+ *  to surface loudly. */
+export interface CompanyInfoResult {
+  ok: boolean;
+  symbol: string;
+  sector: string;
+  industry: string;
+  error: string;
+}
+
+/** One forward or reverse split. `ratio` is yfinance's own convention -- 3.0
+ *  for a 3-for-1 forward split (1 old share becomes 3), 0.1 for a 1-for-10
+ *  reverse split. See splitAdjustedPrice below. */
+export interface StockSplit {
+  date: IsoDate;
+  ratio: number;
+}
+
+/** What GET /api/market-data/splits returns. `ok: false` is the normal state
+ *  whenever Yahoo Finance doesn't recognize the symbol; an empty `splits`
+ *  list with `ok: true` is the normal case for a symbol that's never
+ *  split. */
+export interface SplitsResult {
+  ok: boolean;
+  symbol: string;
+  splits: StockSplit[];
+  error: string;
+}
+
+/** Converts a fill's own nominal price onto the split-adjusted scale
+ *  yfinance's historical bars are already on, by dividing out every split
+ *  dated after the fill -- e.g. TSLA's 3-for-1 split on 2022-08-25 turns a
+ *  pre-split $600 fill into $200, matching where that date's bars sit on
+ *  today's chart. Without this, a price line for an old fill can land off
+ *  the top of a tightly zoomed chart's own price scale, at a value the
+ *  visible candles never actually reached. */
+export function splitAdjustedPrice(price: number, tradeDate: IsoDate, splits: StockSplit[]): number {
+  const ratio = splits.filter((s) => s.date > tradeDate).reduce((acc, s) => acc * s.ratio, 1);
+  return price / ratio;
+}
+
 const BASE = "";
 
 async function get<T>(path: string): Promise<T> {
@@ -271,6 +313,10 @@ export const api = {
     get<MarketDataResult>(
       `/api/market-data/ohlcv?symbol=${encodeURIComponent(symbol)}&lookback_days=${lookbackDays}`,
     ),
+  companyInfo: (symbol: string): Promise<CompanyInfoResult> =>
+    get<CompanyInfoResult>(`/api/market-data/company-info?symbol=${encodeURIComponent(symbol)}`),
+  splits: (symbol: string): Promise<SplitsResult> =>
+    get<SplitsResult>(`/api/market-data/splits?symbol=${encodeURIComponent(symbol)}`),
   /** `started` is false when a download is already running -- only one runs
    *  at a time, and the message says which year holds the slot. */
   downloadYear: (year: number): Promise<{ started: boolean; message: string }> =>

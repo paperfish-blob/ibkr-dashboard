@@ -53,6 +53,11 @@
     /** A single fill to call out with a horizontal price line, e.g. the
      *  transaction row the user just clicked. */
     selectedMarker?: { price: number; label: string; color: string } | null;
+    /** "YYYY-MM-DD" -- zooms to a window centered on this date (e.g. the
+     *  same transaction row selectedMarker calls out), so an old fill on a
+     *  trade with a wide default view isn't a sliver at the chart's edge.
+     *  Reverts to the default view once cleared. */
+    focusDate?: string | null;
     /** "YYYY-MM" -- dims every bar outside this calendar month, e.g. synced
      *  from a hovered month in a P&L chart elsewhere on the page. */
     highlightMonth?: string | null;
@@ -98,6 +103,7 @@
     tradeMarkers,
     focusRange,
     selectedMarker,
+    focusDate = null,
     highlightMonth,
     regimeBands = false,
     apsPane = true,
@@ -187,6 +193,23 @@
     from.setDate(from.getDate() - MONTH_ZOOM_PADDING_DAYS);
     const to = new Date(y, m, 1); // first of the following month
     to.setDate(to.getDate() + MONTH_ZOOM_PADDING_DAYS);
+    chart.timeScale().setVisibleRange({
+      from: Math.floor(from.getTime() / 1000) as unknown as Time,
+      to: Math.floor(to.getTime() / 1000) as unknown as Time,
+    });
+  }
+
+  // A selected trade date gets the same treatment as a hovered month above,
+  // just centered on one day instead of a whole calendar month -- wider
+  // padding than MONTH_ZOOM_PADDING_DAYS since a single day's own candle
+  // needs more surrounding context to read as a shape rather than a dot.
+  const FOCUS_DATE_PADDING_DAYS = 45;
+  function zoomToDate(dateStr: string) {
+    if (!chart) return;
+    const from = new Date(dateStr);
+    from.setDate(from.getDate() - FOCUS_DATE_PADDING_DAYS);
+    const to = new Date(dateStr);
+    to.setDate(to.getDate() + FOCUS_DATE_PADDING_DAYS);
     chart.timeScale().setVisibleRange({
       from: Math.floor(from.getTime() / 1000) as unknown as Time,
       to: Math.floor(to.getTime() / 1000) as unknown as Time,
@@ -447,6 +470,22 @@
         axisLabelVisible: true,
         title: marker.label,
       });
+    }
+  });
+
+  $effect(() => {
+    chartVersion;
+    const date = focusDate;
+    if (!chart) return;
+    // Only zoom if the fetched history actually covers this date -- a trade
+    // older than the lookback window would otherwise zoom to an empty pane
+    // with a stale price scale, same reasoning as highlightMonth's own
+    // hasBarsForMonth check below.
+    const covered = date && history?.length && date >= history[0].time && date <= history[history.length - 1].time;
+    if (covered) {
+      zoomToDate(date!);
+    } else {
+      applyDefaultViewRef?.();
     }
   });
 

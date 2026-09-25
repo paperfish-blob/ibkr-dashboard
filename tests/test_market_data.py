@@ -7,8 +7,8 @@ import math
 from datetime import date
 from types import SimpleNamespace
 
-from ibkr_pnl.models import OHLCVBar
-from ibkr_pnl.sources.market_data import _patch_todays_bar, fetch_ohlcv, plain_ticker
+from ibkr_pnl.models import OHLCVBar, StockSplit
+from ibkr_pnl.sources.market_data import _patch_todays_bar, fetch_ohlcv, fetch_splits, plain_ticker
 
 
 def test_plain_ticker_strips_the_cfd_suffix():
@@ -98,4 +98,37 @@ def test_fetch_ohlcv_treats_an_empty_series_as_not_ok():
 
     result = asyncio.run(fetch_ohlcv("NOSUCHTICKERn", history_fetcher=empty_fetcher))
     assert result.ok is False
+    assert result.error
+
+
+def test_fetch_splits_strips_the_cfd_suffix_and_parses_a_successful_response():
+    def fetcher(ticker: str) -> list[StockSplit]:
+        assert ticker == "TSLA"
+        return [StockSplit(date=date(2020, 8, 31), ratio=5.0), StockSplit(date=date(2022, 8, 25), ratio=3.0)]
+
+    result = asyncio.run(fetch_splits("TSLAn", splits_fetcher=fetcher))
+    assert result.ok is True
+    assert result.symbol == "TSLA"
+    assert len(result.splits) == 2
+    assert result.splits[-1].ratio == 3.0
+
+
+def test_fetch_splits_treats_a_never_split_symbol_as_ok_with_an_empty_list():
+    """No splits is the normal case for most symbols, not an error."""
+
+    def fetcher(ticker: str) -> list[StockSplit]:
+        return []
+
+    result = asyncio.run(fetch_splits("ARMn", splits_fetcher=fetcher))
+    assert result.ok is True
+    assert result.splits == []
+
+
+def test_fetch_splits_reports_a_clear_error_when_the_lookup_raises():
+    def failing_fetcher(ticker: str) -> list[StockSplit]:
+        raise RuntimeError("boom")
+
+    result = asyncio.run(fetch_splits("TSLAn", splits_fetcher=failing_fetcher))
+    assert result.ok is False
+    assert result.symbol == "TSLA"
     assert result.error

@@ -15,9 +15,10 @@ from typing import Callable
 
 import yfinance as yf
 
-from ..models import MarketDataResult, OHLCVBar
+from ..models import MarketDataResult, OHLCVBar, SplitsResult, StockSplit
 
 HistoryFetcher = Callable[[str, int], list[OHLCVBar]]
+SplitsFetcher = Callable[[str], list[StockSplit]]
 
 
 def plain_ticker(symbol: str) -> str:
@@ -96,3 +97,28 @@ async def fetch_ohlcv(
     if not bars:
         return MarketDataResult(ok=False, symbol=ticker, error=f"No price history found for {ticker}")
     return MarketDataResult(ok=True, symbol=ticker, bars=bars)
+
+
+def _fetch_splits(ticker: str) -> list[StockSplit]:
+    """Runs in a worker thread -- yfinance does blocking HTTP under the hood."""
+    return [StockSplit(date=idx.date(), ratio=float(ratio)) for idx, ratio in yf.Ticker(ticker).splits.items()]
+
+
+async def fetch_splits(
+    symbol: str,
+    *,
+    splits_fetcher: SplitsFetcher | None = None,
+) -> SplitsResult:
+    """A symbol's whole split history, ascending by date -- an empty list is
+    the normal, successful result for a symbol that's never split. Positions
+    reaches for this to convert an old, nominal fill price onto the
+    split-adjusted scale `.history()`'s bars are already on (see the
+    frontend's splitAdjustedPrice). `splits_fetcher` exists only so tests can
+    substitute a fake instead of hitting Yahoo Finance."""
+    ticker = plain_ticker(symbol)
+    fetcher = splits_fetcher or _fetch_splits
+    try:
+        splits = await asyncio.to_thread(fetcher, ticker)
+    except Exception as exc:
+        return SplitsResult(ok=False, symbol=ticker, error=f"Yahoo Finance lookup failed: {exc}")
+    return SplitsResult(ok=True, symbol=ticker, splits=splits)

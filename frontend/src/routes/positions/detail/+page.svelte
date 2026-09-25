@@ -26,7 +26,16 @@
     toneOf,
     EM_DASH,
   } from "$lib/format";
-  import { api, findPositionByParams, type MarketDataResult, type OHLCVBar, type PositionLeg } from "$lib/api";
+  import {
+    api,
+    findPositionByParams,
+    splitAdjustedPrice,
+    type CompanyInfoResult,
+    type MarketDataResult,
+    type OHLCVBar,
+    type PositionLeg,
+    type StockSplit,
+  } from "$lib/api";
   import { positions, positionsLoading, positionsError, refreshPositions } from "$lib/stores";
 
   const POLL_MS = 30_000;
@@ -107,11 +116,29 @@
     if (!selectedTx) return null;
     const row = txRows.find((r) => r.kind === selectedTx!.kind && r.n === selectedTx!.n);
     if (!row || row.leg.price === null) return null;
+    const rawPrice = num(row.leg.price);
+    const adjPrice = splitAdjustedPrice(rawPrice, row.leg.trade_date, splits);
+    // A pre-split fill's nominal price would otherwise sit off the top of
+    // the chart's own split-adjusted scale -- the line is drawn (and
+    // labeled) at the adjusted value instead, with a note when that's not
+    // just the raw fill price, since the transaction list to the left still
+    // (correctly) shows the real, unadjusted number.
+    const adjusted = Math.abs(adjPrice - rawPrice) > 0.0001;
     return {
-      price: num(row.leg.price),
-      label: `${selectedTx.kind === "entry" ? "Entry" : "Exit"} ${selectedTx.n} · ${fmtPriceLike(num(row.leg.price), position!.currency, 4)}`,
+      price: adjPrice,
+      label: `${selectedTx.kind === "entry" ? "Entry" : "Exit"} ${selectedTx.n} · ${fmtPriceLike(adjPrice, position!.currency, 4)}${adjusted ? " (split-adj.)" : ""}`,
       color: sideClass(row.leg.buy_sell) === "sell" ? "#ef4444" : "#5b6cff",
     };
+  });
+
+  // Zooms the daily chart to the clicked row's own date -- otherwise an old
+  // fill on a trade with a wide default view (see focusRange below) is a
+  // sliver at the chart's edge, easy to miss under the flat price line
+  // selectedMarker draws across the whole visible window.
+  const selectedTradeDate = $derived.by(() => {
+    if (!selectedTx) return null;
+    const row = txRows.find((r) => r.kind === selectedTx!.kind && r.n === selectedTx!.n);
+    return row?.leg.trade_date ?? null;
   });
 
   async function handleRefresh() {
@@ -222,6 +249,33 @@
           }),
       )
       .finally(() => (marketDataLoading = false));
+  });
+
+  // Sector/industry for the header subtitle -- fetched once the position
+  // (and so its symbol) resolves, same as the chart data above; Finviz
+  // classification doesn't change with the position/transaction refresh
+  // cycle, so it isn't re-fetched on every poll.
+  let companyInfo = $state<CompanyInfoResult | null>(null);
+  $effect(() => {
+    const symbol = position?.symbol;
+    if (!symbol) return;
+    api
+      .companyInfo(symbol)
+      .then((r) => (companyInfo = r))
+      .catch(() => (companyInfo = null));
+  });
+
+  // A symbol's split history, so an old fill's price line can be put on the
+  // same split-adjusted scale as the chart's own bars (see selectedMarker
+  // below) -- fetched once per symbol, same reasoning as companyInfo above.
+  let splits = $state<StockSplit[]>([]);
+  $effect(() => {
+    const symbol = position?.symbol;
+    if (!symbol) return;
+    api
+      .splits(symbol)
+      .then((r) => (splits = r.ok ? r.splits : []))
+      .catch(() => (splits = []));
   });
 
   // Index context chart, shown above the position's own -- same lookback so
@@ -347,9 +401,14 @@
     <span>{position?.symbol ?? ($positionsLoading ? "…" : "Not found")}</span>
   </div>
 
+  {#snippet industrySubtitle()}
+    {companyInfo?.sector} &rsaquo; {companyInfo?.industry}
+  {/snippet}
+
   <PageHeader
     eyebrow="Round-trip P&amp;L · Flex statement"
     title={position?.symbol ?? "Position"}
+    subtitle={companyInfo?.ok && companyInfo.sector && companyInfo.industry ? industrySubtitle : undefined}
     sticky
     onRefresh={handleRefresh}
     {refreshing}
@@ -517,6 +576,7 @@
             {tradeMarkers}
             {focusRange}
             {selectedMarker}
+            focusDate={selectedTradeDate}
             onCrosshairMove={reportCrosshair}
             syncCrosshairTime={syncedCrosshair}
             onVisibleRangeChange={reportRange}

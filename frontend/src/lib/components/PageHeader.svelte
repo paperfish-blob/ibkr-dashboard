@@ -10,6 +10,10 @@
   interface Props {
     eyebrow: string;
     title: string;
+    /** A quiet line under the title, e.g. a symbol's sector/industry --
+     *  identifying detail about the thing the page is showing, not a
+     *  second piece of data to scan for separately. */
+    subtitle?: Snippet;
     marginBottom?: string;
     sticky?: boolean;
     onRefresh?: () => void;
@@ -23,6 +27,7 @@
   let {
     eyebrow,
     title,
+    subtitle,
     marginBottom = "24px",
     sticky = false,
     onRefresh,
@@ -43,6 +48,7 @@
     <div class="title-stack">
       <div class="eyebrow">{eyebrow}</div>
       <h1>{title}</h1>
+      {#if subtitle}<div class="subtitle">{@render subtitle()}</div>{/if}
     </div>
   </div>
 
@@ -141,6 +147,11 @@
     font-size: var(--text-2xl);
     font-weight: var(--weight-semibold);
     letter-spacing: -0.01em;
+  }
+
+  .subtitle {
+    font-size: var(--text-xs);
+    color: var(--text);
   }
 
   /* The house ghost button, repeated verbatim from ui-reference. */

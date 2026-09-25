@@ -14,8 +14,16 @@ from fastapi.staticfiles import StaticFiles
 from . import aggregate, cache, positions as posmod
 from .config import PROJECT_ROOT, settings
 from .history import HistoryStatus, manager
-from .models import FlexResult, MarketDataResult, PnLResponse, PositionsResponse, TransactionsResponse
-from .sources import market_data
+from .models import (
+    CompanyInfoResult,
+    FlexResult,
+    MarketDataResult,
+    PnLResponse,
+    PositionsResponse,
+    SplitsResult,
+    TransactionsResponse,
+)
+from .sources import company_info, market_data
 from .sources.gateway import monitor
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
@@ -82,6 +90,20 @@ async def get_positions(period: str = PERIOD_QUERY):
 async def get_market_data_ohlcv(symbol: str, lookback_days: int = Query(270, ge=1, le=3650)):
     """Daily bars for the Positions detail page's chart, via yfinance."""
     return await market_data.fetch_ohlcv(symbol, lookback_days=lookback_days)
+
+
+@app.get("/api/market-data/company-info", response_model=CompanyInfoResult)
+async def get_market_data_company_info(symbol: str):
+    """Sector/industry for the Positions detail page's header, via Finviz."""
+    return await company_info.fetch_company_info(symbol)
+
+
+@app.get("/api/market-data/splits", response_model=SplitsResult)
+async def get_market_data_splits(symbol: str):
+    """A symbol's split history, so the Positions detail page's chart can
+    put an old fill's price line on the same split-adjusted scale as its
+    OHLCV bars, via yfinance."""
+    return await market_data.fetch_splits(symbol)
 
 
 @app.get("/api/history", response_model=HistoryStatus)

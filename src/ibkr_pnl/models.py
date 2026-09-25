@@ -204,6 +204,39 @@ class MarketDataResult(BaseModel):
     error: str = ""
 
 
+class StockSplit(BaseModel):
+    """One forward or reverse split. `ratio` is yfinance's own convention --
+    3.0 for a 3-for-1 forward split (1 old share becomes 3), 0.1 for a
+    1-for-10 reverse split -- so a pre-split price divides by the product of
+    every split's ratio dated after it to land on today's adjusted scale."""
+
+    date: date
+    ratio: float
+
+
+class SplitsResult(BaseModel):
+    """What GET /api/market-data/splits returns. `ok=False` is the normal
+    state for a symbol Yahoo Finance doesn't recognize -- see
+    sources/market_data.py."""
+
+    ok: bool
+    symbol: str = ""  # the plain ticker actually queried, after CFD-suffix stripping
+    splits: list[StockSplit] = []
+    error: str = ""
+
+
+class CompanyInfoResult(BaseModel):
+    """What GET /api/market-data/company-info returns. `ok=False` is the
+    normal state for a symbol Finviz doesn't cover -- see
+    sources/company_info.py."""
+
+    ok: bool
+    symbol: str = ""  # the plain ticker actually queried, after CFD-suffix stripping
+    sector: str = ""
+    industry: str = ""
+    error: str = ""
+
+
 class PnLResponse(BaseModel):
     """What GET /api/pnl returns."""
 
