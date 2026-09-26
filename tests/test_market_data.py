@@ -22,6 +22,12 @@ def test_plain_ticker_leaves_non_cfd_symbols_alone():
     assert plain_ticker("ARM") == "ARM"
 
 
+def test_plain_ticker_applies_the_known_ibkr_to_yahoo_symbol_overrides():
+    """SanDisk's CFD is "SNDKVn" -- stripping the CFD suffix alone lands on
+    "SNDKV", which Yahoo has never recognized; the real listing is "SNDK"."""
+    assert plain_ticker("SNDKVn") == "SNDK"
+
+
 def test_plain_ticker_is_a_noop_for_the_etf_cfds_that_break_the_pattern():
     """A handful of real CFD tickers (ETFs) don't carry the suffix at all --
     checked against a real account's data. Stripping only a trailing lower-

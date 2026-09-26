@@ -21,6 +21,18 @@ HistoryFetcher = Callable[[str, int], list[OHLCVBar]]
 SplitsFetcher = Callable[[str], list[StockSplit]]
 
 
+# A handful of IBKR CFD tickers, once the CFD suffix is stripped, still
+# don't match what Yahoo Finance actually lists -- not a suffix to strip,
+# just a different spelling. Checked one at a time as they turn up rather
+# than guessed at with a general rule (e.g. "drop the last letter and
+# retry" would just as easily mangle a real short ticker on an unrelated
+# Yahoo hiccup). Known so far: SanDisk's CFD carries an extra "V" -- likely
+# left over from its 2025 spin-off out of Western Digital, before it
+# settled back onto the plain "SNDK" ticker -- that Yahoo has never
+# recognized.
+_TICKER_OVERRIDES = {"SNDKV": "SNDK"}
+
+
 def plain_ticker(symbol: str) -> str:
     """IBKR appends a lowercase "n" to CFD tickers (e.g. "ARMn" for the ARM
     CFD) -- real ticker symbols are always uppercase, so a trailing lowercase
@@ -28,7 +40,8 @@ def plain_ticker(symbol: str) -> str:
     283 distinct symbols: every STK/CASH ticker is plain, and of 205 CFD
     tickers only 6 (ETF CFDs like SPY, XLF) don't carry the suffix -- for
     those this is a no-op, which is exactly what's wanted."""
-    return symbol[:-1] if symbol.endswith("n") else symbol
+    ticker = symbol[:-1] if symbol.endswith("n") else symbol
+    return _TICKER_OVERRIDES.get(ticker, ticker)
 
 
 def _patch_todays_bar(t: yf.Ticker, bar: OHLCVBar) -> OHLCVBar:
