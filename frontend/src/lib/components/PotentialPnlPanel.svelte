@@ -23,9 +23,10 @@
   import { onMount, onDestroy } from "svelte";
   import type { Chart as ChartType } from "chart.js";
   import SegToggle from "./SegToggle.svelte";
+  import PositionSparkCard from "./PositionSparkCard.svelte";
   import type { OpenPositionsRow } from "./OpenPositionsList.svelte";
-  import { positionDetailParams, type CumulativePoint } from "$lib/api";
-  import { fmtDay, fmtDayYear, fmtMoney, fmtPriceLike, toneOf, num, EM_DASH } from "$lib/format";
+  import type { CumulativePoint } from "$lib/api";
+  import { fmtDay, fmtMoney, fmtPriceLike, toneOf, num } from "$lib/format";
 
   export interface DayPoint {
     date: string;
@@ -71,22 +72,6 @@
   }
   function compactFmt(v: number): string {
     return new Intl.NumberFormat("en-US", { notation: "compact" }).format(v);
-  }
-
-  function sparkPath(series: DayPoint[]): string {
-    if (series.length === 0) return "";
-    const values = series.map((p) => p.value);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
-    const span = max - min || 1;
-    const n = series.length;
-    return series
-      .map((p, i) => {
-        const x = n === 1 ? 0 : (i / (n - 1)) * 300;
-        const y = 84 - ((p.value - min) / span) * 78;
-        return `${i === 0 ? "M" : "L"}${x.toFixed(1)},${y.toFixed(1)}`;
-      })
-      .join(" ");
   }
 
   let canvas = $state<HTMLCanvasElement | null>(null);
@@ -368,33 +353,7 @@
   </div>
   <div class="grid">
     {#each bySymbol as p (p.row.p.symbol + p.row.p.open_date + p.row.p.open_time)}
-      {@const last = p.series.at(-1)?.value ?? 0}
-      {@const prev = p.series.length > 1 ? p.series[p.series.length - 2].value : null}
-      <a class="card" href="/positions/detail?{positionDetailParams(p.row.p)}" target="_blank" rel="noopener">
-        <div class="card-top">
-          <span class="card-sym">{p.row.p.symbol}</span>
-          <span class="card-range">{p.row.p.open_date ? fmtDayYear(p.row.p.open_date) : EM_DASH} &rarr; today</span>
-        </div>
-        <div class="card-pnl {toneOf(last)}">{fmtMoney(last, currency)}</div>
-        {#if prev !== null}
-          <div class="card-today {toneOf(last - prev)}">{fmtMoney(last - prev, currency)} today</div>
-        {/if}
-        <div class="card-sub">
-          {p.row.status === "full" ? "Open (Full)" : "Open (Partial)"}
-          {#if p.row.interim !== null}
-            &middot; includes {fmtMoney(p.row.interim, currency)} already realized
-          {/if}
-        </div>
-        <div class="spark">
-          <svg viewBox="0 0 300 90" preserveAspectRatio="none">
-            <path d={sparkPath(p.series)} fill="none" stroke={cssVar(last >= 0 ? "--up" : "--dn")} stroke-width="1.6" />
-          </svg>
-        </div>
-        <div class="card-foot">
-          <span>{p.row.p.open_date ? fmtDayYear(p.row.p.open_date) : EM_DASH}</span>
-          <span>{p.row.daysHeld !== null && p.row.daysHeld < 30 ? `Today (${p.row.daysHeld}d)` : "Today"}</span>
-        </div>
-      </a>
+      <PositionSparkCard {p} {currency} />
     {/each}
   </div>
 </div>
@@ -459,80 +418,5 @@
     grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
     gap: 1px;
     background: var(--border-05);
-  }
-  .card {
-    background: var(--surface);
-    padding: 16px 18px;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    text-decoration: none;
-    color: inherit;
-  }
-  .card:hover {
-    background: var(--surface-02);
-  }
-  .card-top {
-    display: flex;
-    align-items: baseline;
-    justify-content: space-between;
-    gap: 8px;
-  }
-  .card-sym {
-    font-size: var(--text-sm);
-    font-weight: var(--weight-bold);
-    color: var(--text);
-  }
-  .card-range {
-    font-size: 9.5px;
-    color: var(--dim-45);
-    white-space: nowrap;
-  }
-  .card-pnl {
-    font-size: var(--text-xl);
-    font-weight: var(--weight-bold);
-    letter-spacing: -0.01em;
-  }
-  .card-pnl.pos {
-    color: var(--up);
-  }
-  .card-pnl.neg {
-    color: var(--dn);
-  }
-  .card-pnl.flat {
-    color: var(--text);
-  }
-  .card-today {
-    font-size: var(--text-2xs);
-    font-weight: var(--weight-semibold);
-    margin-top: -3px;
-  }
-  .card-today.pos {
-    color: var(--up);
-  }
-  .card-today.neg {
-    color: var(--dn);
-  }
-  .card-today.flat {
-    color: var(--dim-55);
-  }
-  .card-sub {
-    font-size: var(--text-2xs);
-    color: var(--dim-55);
-  }
-  .spark {
-    margin-top: 4px;
-  }
-  .spark svg {
-    display: block;
-    width: 100%;
-    height: 68px;
-  }
-  .card-foot {
-    display: flex;
-    justify-content: space-between;
-    font-size: 9.5px;
-    color: var(--dim-45);
-    margin-top: 2px;
   }
 </style>
