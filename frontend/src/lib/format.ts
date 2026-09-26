@@ -141,6 +141,16 @@ export function fmtTime(iso: string | null): string {
   return new Date(iso).toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit" });
 }
 
+/** Compact date + clock time from an ISO timestamp: "Sep 23, 4:20 PM" --
+ *  for a timestamp that could be from any past day (e.g. a year downloaded
+ *  once and never refetched), where the bare time alone doesn't say which
+ *  day it happened. Null renders as an em dash. */
+export function fmtDateTime(iso: string | null): string {
+  if (!iso) return EM_DASH;
+  const d = new Date(iso);
+  return `${d.toLocaleDateString("en-US", { month: "short", day: "numeric" })}, ${fmtTime(iso)}`;
+}
+
 /**
  * "YYYY-MM-DD" -> local Date at midnight.
  *

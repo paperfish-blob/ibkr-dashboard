@@ -10,7 +10,7 @@
   import PageHeader from "$lib/components/PageHeader.svelte";
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
   import AlertBar from "$lib/components/AlertBar.svelte";
-  import { fmtMoney, fmtTime, num, toneOf, EM_DASH } from "$lib/format";
+  import { fmtDateTime, fmtMoney, num, toneOf, EM_DASH } from "$lib/format";
   import {
     history,
     historyError,
@@ -217,7 +217,7 @@
                   {/if}
                 </td>
                 <td class="num dim">
-                  {y.downloaded_at ? fmtTime(y.downloaded_at) : EM_DASH}
+                  {y.downloaded_at ? fmtDateTime(y.downloaded_at) : EM_DASH}
                 </td>
                 <td class="act">
                   <div class="act-row">
