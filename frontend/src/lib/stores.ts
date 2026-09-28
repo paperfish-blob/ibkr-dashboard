@@ -123,6 +123,13 @@ export const posSymbols = persisted<string[]>("ibkr.pos.symbols", []);
  *  carry-in can be either open or closed. Off by default. */
 export const posCarryInOnly = persisted<boolean>("ibkr.pos.carryInOnly", false);
 
+/** Fold closed positions' realized P&L into the Open Positions page's
+ *  totals, back to the earliest still-open position in the selected
+ *  from-year -- see boundaryDate in positions/open/+page.svelte. Off by
+ *  default, same reasoning as txGroupFills: it changes numbers people are
+ *  used to reading, so it should be opt-in rather than a surprise on load. */
+export const posIncludeRealized = persisted<boolean>("ibkr.pos.includeRealized", false);
+
 export type PosSide = "all" | "long" | "short";
 
 /** Direction filter for the Positions page, same multi-value convention as

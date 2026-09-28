@@ -1,12 +1,14 @@
 <script lang="ts">
   /**
-   * Currently-open holdings only -- Open (Full) and Open (Partial), never
-   * Closed, and carry-in positions are excluded outright (their entry price
-   * and date are unknown by definition, so cost basis and unrealized P&L
-   * can't be computed for them). Forces period="all" on entry so a position
-   * opened in an earlier year than whatever's selected elsewhere doesn't
-   * silently disappear from a page whose whole point is "what am I holding
-   * right now."
+   * Currently-open holdings -- Open (Full) and Open (Partial) -- plus,
+   * when "Include realized" is on, every closed position folded in back
+   * to the earliest still-open position in the selected from-year (see
+   * boundaryDate below). Carry-in positions are excluded outright (their
+   * entry price and date are unknown by definition, so cost basis and
+   * unrealized P&L can't be computed for them). Forces period="all" on
+   * entry so a position opened in an earlier year than whatever's
+   * selected elsewhere doesn't silently disappear from a page whose whole
+   * point is "what am I holding right now."
    */
   import { onMount } from "svelte";
   import { browser } from "$app/environment";
@@ -16,15 +18,28 @@
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
   import AlertBar from "$lib/components/AlertBar.svelte";
   import SegToggle from "$lib/components/SegToggle.svelte";
+  import Switch from "$lib/components/Switch.svelte";
   import PotentialPnlPanel from "$lib/components/PotentialPnlPanel.svelte";
   import type { PositionSeries } from "$lib/components/PotentialPnlPanel.svelte";
   import OpenPositionsSummary from "$lib/components/OpenPositionsSummary.svelte";
+  import PositionExposurePanel from "$lib/components/PositionExposurePanel.svelte";
   import OpenPositionsList from "$lib/components/OpenPositionsList.svelte";
   import OpenPositionCountPanel from "$lib/components/OpenPositionCountPanel.svelte";
   import type { OpenPositionsRow } from "$lib/components/OpenPositionsList.svelte";
+  import TotalPnlHero from "$lib/components/TotalPnlHero.svelte";
+  import ClosedPositionsList from "$lib/components/ClosedPositionsList.svelte";
+  import type { ClosedPositionsRow } from "$lib/components/ClosedPositionsList.svelte";
+  import CombinedPositionsList from "$lib/components/CombinedPositionsList.svelte";
   import { api, type CumulativePoint, type OHLCVBar, type Position } from "$lib/api";
-  import { daysSince, num, parseISODay } from "$lib/format";
-  import { positions, positionsLoading, positionsError, refreshPositions, setPeriod } from "$lib/stores";
+  import { daysSince, fmtDayYear, num, parseISODay } from "$lib/format";
+  import {
+    positions,
+    positionsLoading,
+    positionsError,
+    refreshPositions,
+    setPeriod,
+    posIncludeRealized,
+  } from "$lib/stores";
 
   const POLL_MS = 30_000;
   let refreshing = $state(false);
@@ -38,6 +53,11 @@
   // the newest year with an open position, rather than hardcoding a year
   // that would go stale.
   let fromYear = $state<string | null>(null);
+
+  // Separate (today's two stacked tables) vs Combined (one table, entry
+  // date ascending, merging open + closed rows) -- only meaningful once
+  // "Include realized" has actually produced closed rows to combine with.
+  let tableView = $state<"separate" | "combined">("separate");
 
   function handleReset(url: URL) {
     if (url.searchParams.get("reset") !== "1") return;
@@ -159,12 +179,65 @@
     };
   }
 
-  const rows = $derived(yearFilteredPositions.map(toRow));
+  // Entry date ascending by default (oldest open position first), open_time
+  // as a same-day tiebreaker -- same ordering key as boundaryPosition below.
+  const rows = $derived(
+    [...yearFilteredPositions]
+      .sort((a, b) => ((a.open_date ?? "") + a.open_time).localeCompare((b.open_date ?? "") + b.open_time))
+      .map(toRow),
+  );
   const totalUnrealized = $derived(rows.reduce((sum, r) => sum + (r.unrealized ?? 0), 0));
   const totalPartialRealized = $derived(rows.reduce((sum, r) => sum + (r.interim ?? 0), 0));
   const totalCost = $derived(rows.reduce((sum, r) => sum + r.costBasis, 0));
   const fullCount = $derived(rows.filter((r) => r.status === "full").length);
   const partialCount = $derived(rows.filter((r) => r.status === "partial").length);
+
+  // -- Realized P&L, folded in when "Include realized" is on --------------
+  //
+  // Every fully closed, non-carry-in position -- the same $positions feed
+  // the open rows above come from, just the opposite is_open branch.
+  const closedPositions = $derived(($positions?.positions ?? []).filter((p) => !p.is_open && !p.is_carry_in));
+
+  // The window's boundary: the earliest still-OPEN position in the
+  // selected from-year, by open_date then open_time to break a same-day
+  // tie (see e.g. two positions opened the same morning). yearFilteredPositions
+  // is already every open position from effectiveFromYear onward, so its
+  // own earliest entry is exactly "the first position from that year I'm
+  // still holding" -- not the first position of any status, since a
+  // closed one from earlier in the year shouldn't move the anchor.
+  const boundaryPosition = $derived(
+    yearFilteredPositions.length === 0
+      ? null
+      : yearFilteredPositions.reduce((earliest, p) =>
+          (p.open_date ?? "") + p.open_time < (earliest.open_date ?? "") + earliest.open_time ? p : earliest,
+        ),
+  );
+  const boundaryDate = $derived(boundaryPosition?.open_date ?? null);
+
+  // Closed positions count toward the window by their own entry date,
+  // exactly like the open positions above -- never by when they happened
+  // to realize. A position that closed today but opened before the
+  // boundary won't show up until an earlier from-year is selected.
+  const closedInWindow = $derived(
+    boundaryDate === null ? [] : closedPositions.filter((p) => p.open_date && p.open_date >= boundaryDate),
+  );
+
+  function toClosedRow(p: Position): ClosedPositionsRow {
+    const daysHeld =
+      p.open_date && p.exit_date
+        ? Math.round((parseISODay(p.exit_date).getTime() - parseISODay(p.open_date).getTime()) / 86_400_000)
+        : null;
+    // A fully closed position's quantity is its original entry size (exit
+    // total == entry total by definition, unlike an open position's netted
+    // remainder -- see toRow's comment above) -- so it's used as-is for
+    // cost basis, the same qty * entryPrice as an open row.
+    const qty = num(p.quantity);
+    const entryPrice = num(p.entry_price);
+    return { p, realized: num(p.realized_pnl), daysHeld, entryPrice, qty, costBasis: qty * entryPrice };
+  }
+  const closedRows = $derived(closedInWindow.map(toClosedRow));
+  const realizedClosedTotal = $derived(closedRows.reduce((sum, r) => sum + r.realized, 0));
+  const totalPnl = $derived(totalUnrealized + totalPartialRealized + realizedClosedTotal);
 
   // Day-by-day "what would this position be worth if I closed it at that
   // day's close" -- cumulative realized P&L from any exits already taken
@@ -329,6 +402,12 @@
     {refreshing}
   >
     {#snippet right()}
+      <Switch
+        checked={$posIncludeRealized}
+        label="Include realized"
+        ariaLabel="Include realized P&amp;L since the selected year"
+        onChange={(v) => posIncludeRealized.set(v)}
+      />
       {#if yearOptions.length > 1}
         <SegToggle label="From year" options={yearOptions} active={effectiveFromYear} onChange={(v) => (fromYear = v)} />
       {/if}
@@ -348,6 +427,16 @@
         >{hiddenByFromYear} pre-{effectiveFromYear} position{hiddenByFromYear === 1 ? "" : "s"} hidden</span
       >
     {/if}
+    {#if $posIncludeRealized && boundaryDate}
+      <div class="realized-note">
+        Plus {closedRows.length} closed position{closedRows.length === 1 ? "" : "s"} opened on or after {fmtDayYear(
+          boundaryDate,
+        )} ({boundaryPosition?.symbol}, the first position {effectiveFromYear === "all"
+          ? "on record"
+          : `from ${effectiveFromYear}`} still open) &middot; closed positions count by entry date, same as the filter
+        above.
+      </div>
+    {/if}
   </div>
 
   <AlertBar messages={[$positionsError, $positions?.flex_error]} />
@@ -360,6 +449,17 @@
     {#if rows.length === 0}
       <div class="panel-empty">No open positions right now.</div>
     {:else}
+      {#if $posIncludeRealized}
+        <TotalPnlHero
+          total={totalPnl}
+          unrealized={totalUnrealized}
+          partial={totalPartialRealized}
+          realizedClosed={realizedClosedTotal}
+          closedCount={closedRows.length}
+          {currency}
+        />
+        <div class="gap"></div>
+      {/if}
       <OpenPositionsSummary
         {totalUnrealized}
         {totalPartialRealized}
@@ -377,7 +477,31 @@
       {/if}
       <OpenPositionCountPanel positions={yearFilteredPositions} />
       <div class="gap"></div>
-      <OpenPositionsList {rows} {currency} />
+      <PositionExposurePanel {rows} {currency} />
+      <div class="gap"></div>
+      {#if $posIncludeRealized && closedRows.length > 0}
+        <div class="table-view-row">
+          <SegToggle
+            label="Table view"
+            options={[
+              { label: "Separate", value: "separate" },
+              { label: "Combined", value: "combined" },
+            ]}
+            active={tableView}
+            onChange={(v) => (tableView = v as "separate" | "combined")}
+          />
+        </div>
+        <div class="gap"></div>
+        {#if tableView === "combined"}
+          <CombinedPositionsList openRows={rows} {closedRows} {currency} />
+        {:else}
+          <ClosedPositionsList rows={closedRows} {currency} />
+          <div class="gap"></div>
+          <OpenPositionsList {rows} {currency} />
+        {/if}
+      {:else}
+        <OpenPositionsList {rows} {currency} />
+      {/if}
     {/if}
   {:else}
     <div class="panel-empty">Could not load positions. Check that the backend is running on port 9001.</div>
@@ -389,11 +513,23 @@
     padding: var(--page-py) var(--page-px);
     width: 100%;
   }
+  .table-view-row {
+    display: flex;
+    justify-content: flex-end;
+  }
   .excl-note {
     font-size: var(--text-xs);
     color: var(--dim-45);
     margin-top: -8px;
     margin-bottom: 16px;
+  }
+  .realized-note {
+    font-size: var(--text-2xs);
+    color: var(--dim-45);
+    margin-top: 6px;
+    padding-left: 14px;
+    border-left: 2px solid var(--border-08);
+    line-height: 1.6;
   }
   .year-badge {
     display: inline-block;
