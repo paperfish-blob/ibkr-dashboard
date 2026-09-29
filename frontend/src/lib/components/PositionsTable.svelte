@@ -12,6 +12,7 @@
     fmtQty,
     grossAmount,
     num,
+    parseISODay,
     sideClass,
     sideLabel,
     toneOf,
@@ -19,6 +20,7 @@
   } from "$lib/format";
   import { positionDetailParams, type Position, type PositionLeg } from "$lib/api";
   import type { PosGroupBy } from "$lib/stores";
+  import SegToggle from "./SegToggle.svelte";
 
   interface Props {
     positions: Position[];
@@ -102,12 +104,72 @@
   const totalCols = 15;
   /** The day band spans everything left of its count and total cells. */
   const dayRowSpan = totalCols - 2;
+
+  /** How many trading days elapsed between one day band and the previous
+   *  one -- weekends never count, since the market isn't open then anyway,
+   *  so a Friday -> Monday pair of trades shouldn't read as a 3-day gap.
+   *  Counts every weekday from the older date (exclusive) through the newer
+   *  date (inclusive), so two trades on consecutive weekdays show a 1-day
+   *  gap rather than 0 -- "how many trading days had passed by the time the
+   *  next trade happened," not "how many days sat idle in between." */
+  function tradingDayGap(newer: string, older: string): number {
+    let count = 0;
+    const cursor = parseISODay(older);
+    const end = parseISODay(newer);
+    cursor.setDate(cursor.getDate() + 1);
+    while (cursor <= end) {
+      const wd = cursor.getDay();
+      if (wd !== 0 && wd !== 6) count++;
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return count;
+  }
+
+  interface GapDay {
+    abbr: string;
+    dateNum: number;
+    isWeekend: boolean;
+  }
+  const WEEKDAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  /** Every calendar day strictly after the older date through the newer
+   *  date -- the same walk tradingDayGap does, but keeping each day instead
+   *  of just the count, for the hover tooltip's Mon/Tue/Wed breakdown. */
+  function gapDayBreakdown(newer: string, older: string): GapDay[] {
+    const days: GapDay[] = [];
+    const cursor = parseISODay(older);
+    const end = parseISODay(newer);
+    cursor.setDate(cursor.getDate() + 1);
+    while (cursor <= end) {
+      const wd = cursor.getDay();
+      days.push({ abbr: WEEKDAY_ABBR[wd], dateNum: cursor.getDate(), isWeekend: wd === 0 || wd === 6 });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+    return days;
+  }
+
+  /** Off by default -- inserting gap bands changes the table's shape, so it
+   *  should be opt-in rather than a surprise on load, same reasoning as
+   *  posIncludeRealized on the Open Positions page. "all" and up show every
+   *  gap of at least that many trading days; "off" shows none. */
+  type GapFilter = "off" | "all" | "3" | "7";
+  let gapFilter = $state<GapFilter>("off");
+  const minGapDays = $derived(gapFilter === "off" ? null : gapFilter === "all" ? 1 : Number(gapFilter));
+  const GAP_OPTIONS = [
+    { label: "Off", value: "off" },
+    { label: "All", value: "all" },
+    { label: "3+ days", value: "3" },
+    { label: "7+ days", value: "7" },
+  ];
 </script>
 
 <div class="panel">
   {#if positions.length === 0}
     <div class="empty">No positions in this statement period.</div>
   {:else}
+    <div class="gap-filter-row">
+      <span class="gap-filter-label">Show trading-day gaps</span>
+      <SegToggle options={GAP_OPTIONS} active={gapFilter} onChange={(v) => (gapFilter = v as GapFilter)} />
+    </div>
     <div class="scroll">
       <table>
         <thead>
@@ -130,7 +192,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each displayGroups as group (group.date + group.rows[0].i)}
+          {#each displayGroups as group, gi (group.date + group.rows[0].i)}
             {@const groupTotal = group.rows.reduce((sum, { p }) => sum + (p.realized_pnl === null ? 0 : num(p.realized_pnl)), 0)}
             <tr class="day-row">
               <td class="day-date" colspan={dayRowSpan}>{group.date ? fmtFullDate(group.date) : EM_DASH}</td>
@@ -222,6 +284,41 @@
               {/each}
             {/if}
           {/each}
+
+          {#if minGapDays !== null && gi < displayGroups.length - 1 && group.date && displayGroups[gi + 1].date}
+            {@const gap = tradingDayGap(group.date, displayGroups[gi + 1].date)}
+            {#if gap >= minGapDays}
+              {@const days = gapDayBreakdown(group.date, displayGroups[gi + 1].date)}
+              <tr class="gap-row">
+                <td colspan={totalCols}>
+                  <div class="gap-line">
+                    <span class="gap-rule"></span>
+                    <button type="button" class="gap-hover">
+                      <span class="gap-pill"
+                        ><span class="gap-dot"></span>{gap} trading day{gap === 1 ? "" : "s"} without a trade</span
+                      >
+                      <span class="gap-tip">
+                        <span class="gap-tip-title">{gap} trading day{gap === 1 ? "" : "s"} without a trade</span>
+                        <span class="gap-tip-days">
+                          {#each days as day}
+                            <span class="day-chip" class:weekend={day.isWeekend}>
+                              <span class="day-abbr">{day.abbr}</span>
+                              <span class="day-num">{day.dateNum}</span>
+                            </span>
+                          {/each}
+                        </span>
+                        <span class="gap-tip-foot">
+                          {fmtFullDate(displayGroups[gi + 1].date)} &rarr; {fmtFullDate(group.date)} &middot; weekends excluded
+                        </span>
+                        <span class="gap-tip-arrow"></span>
+                      </span>
+                    </button>
+                    <span class="gap-rule"></span>
+                  </div>
+                </td>
+              </tr>
+            {/if}
+          {/if}
           {/each}
         </tbody>
       </table>
@@ -234,7 +331,24 @@
     background: var(--surface);
     border: 1px solid var(--border-05);
     border-radius: var(--radius-lg);
-    overflow: hidden;
+    /* Not overflow:hidden -- the gap tooltip pops up above its row and
+       needs to escape this panel rather than get clipped at its edge. */
+  }
+
+  .gap-filter-row {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    padding: 10px 16px;
+    border-bottom: 1px solid var(--border-05);
+  }
+  .gap-filter-label {
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--dim-45);
   }
 
   .scroll {
@@ -466,6 +580,157 @@
     font-weight: var(--weight-semibold);
     color: var(--accent);
     margin-left: 6px;
+  }
+
+  .gap-row td {
+    padding: 4px 16px;
+    border-bottom: none;
+  }
+  .gap-line {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .gap-rule {
+    flex-grow: 1;
+    height: 0;
+    border-top: 1px dashed rgba(var(--amber-rgb), 0.35);
+  }
+  .gap-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    padding: 4px 12px;
+    border-radius: var(--radius-pill);
+    background: var(--amber-bg);
+    border: 1px dashed rgba(var(--amber-rgb), 0.4);
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-bold);
+    letter-spacing: 0.03em;
+    color: var(--amber);
+    white-space: nowrap;
+  }
+  .gap-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: var(--radius-pill);
+    background: var(--amber);
+  }
+
+  .gap-hover {
+    position: relative;
+    flex-shrink: 0;
+    display: inline-flex;
+    background: none;
+    border: none;
+    padding: 0;
+    margin: 0;
+    font: inherit;
+    cursor: help;
+  }
+  .gap-hover:focus-visible {
+    outline: 2px solid var(--amber);
+    outline-offset: 2px;
+    border-radius: var(--radius-pill);
+  }
+  .gap-tip {
+    position: absolute;
+    bottom: 100%;
+    left: 50%;
+    margin-bottom: 10px;
+    z-index: 5;
+    width: max-content;
+    max-width: 360px;
+    padding: 12px 14px;
+    background: var(--surface);
+    border: 1px solid var(--border-08);
+    border-radius: var(--radius-md);
+    box-shadow: 0 10px 28px rgba(var(--ink-rgb), 0.16);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateX(-50%) translateY(-4px);
+    transition:
+      opacity 0.12s ease,
+      transform 0.12s ease;
+    pointer-events: none;
+  }
+  .gap-hover:hover .gap-tip,
+  .gap-hover:focus-within .gap-tip {
+    opacity: 1;
+    visibility: visible;
+    transform: translateX(-50%) translateY(0);
+    pointer-events: auto;
+  }
+  .gap-tip-arrow {
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    width: 10px;
+    height: 10px;
+    background: var(--surface);
+    border-right: 1px solid var(--border-08);
+    border-bottom: 1px solid var(--border-08);
+    transform: translateX(-50%) translateY(-6px) rotate(45deg);
+  }
+  .gap-tip-title {
+    display: block;
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-bold);
+    color: var(--text);
+    margin-bottom: 8px;
+    white-space: nowrap;
+    text-align: left;
+  }
+  .gap-tip-days {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: wrap;
+  }
+  .day-chip {
+    display: inline-block;
+    width: 34px;
+    flex-shrink: 0;
+    text-align: center;
+    padding: 4px 0;
+    border-radius: var(--radius-sm);
+    background: var(--amber-bg);
+    border: 1px solid transparent;
+  }
+  .day-chip .day-abbr {
+    display: block;
+    font-size: 8px;
+    font-weight: var(--weight-bold);
+    letter-spacing: 0.02em;
+    color: var(--amber);
+  }
+  .day-chip .day-num {
+    display: block;
+    font-size: 7px;
+    font-weight: var(--weight-semibold);
+    color: var(--dim-55);
+    margin-top: 1px;
+  }
+  .day-chip.weekend {
+    background: transparent;
+    border: 1px dashed var(--border-12);
+  }
+  .day-chip.weekend .day-abbr {
+    color: var(--dim-35);
+    text-decoration: line-through;
+  }
+  .day-chip.weekend .day-num {
+    color: var(--dim-35);
+  }
+  .gap-tip-foot {
+    display: block;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 1px solid var(--border-05);
+    font-size: 9px;
+    color: var(--dim-45);
+    white-space: nowrap;
   }
 
   .empty {
