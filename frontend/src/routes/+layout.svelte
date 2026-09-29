@@ -1,6 +1,7 @@
 <script lang="ts">
   import "../app.css";
   import { page } from "$app/stores";
+  import CommandPalette from "$lib/components/CommandPalette.svelte";
 
   let { children } = $props();
 
@@ -68,6 +69,8 @@
     {@render children()}
   </main>
 </div>
+
+<CommandPalette />
 
 <style>
   .shell {
