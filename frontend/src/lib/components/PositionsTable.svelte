@@ -147,16 +147,14 @@
     return days;
   }
 
-  /** Off by default -- inserting gap bands changes the table's shape, so it
-   *  should be opt-in rather than a surprise on load, same reasoning as
-   *  posIncludeRealized on the Open Positions page. "all" and up show every
-   *  gap of at least that many trading days; "off" shows none. */
+  /** "All" by default -- "all" and up show every gap of at least that many
+   *  trading days; "off" shows none. */
   type GapFilter = "off" | "all" | "3" | "7";
-  let gapFilter = $state<GapFilter>("off");
+  let gapFilter = $state<GapFilter>("all");
   const minGapDays = $derived(gapFilter === "off" ? null : gapFilter === "all" ? 1 : Number(gapFilter));
   const GAP_OPTIONS = [
-    { label: "Off", value: "off" },
     { label: "All", value: "all" },
+    { label: "Off", value: "off" },
     { label: "3+ days", value: "3" },
     { label: "7+ days", value: "7" },
   ];
