@@ -4,9 +4,13 @@
    * tiles (Unrealized P&L, Partial Realised P&L, Total Cost Basis, Total
    * Open) rather than one hero number with the rest demoted to a small
    * side panel, so Cost Basis and the open count get the same visual
-   * attention as P&L does.
+   * attention as P&L does. A fifth Total Closed tile joins them when
+   * "Include realized" has actual closed rows to report -- same shape as
+   * Total Open (a count leads, with the $ figure demoted to a chip below)
+   * since "how many positions closed" is the headline question there, same
+   * as "how many are open" is for its neighbor.
    */
-  import { fmtMoney, toneOf } from "$lib/format";
+  import { fmtDayYear, fmtMoney, toneOf } from "$lib/format";
 
   interface Props {
     totalUnrealized: number;
@@ -16,6 +20,9 @@
     fullCount: number;
     partialCount: number;
     carryInExcluded: number;
+    closedCount?: number;
+    realizedClosedTotal?: number;
+    closedSinceDate?: string | null;
     currency?: string;
   }
   let {
@@ -26,11 +33,16 @@
     fullCount,
     partialCount,
     carryInExcluded,
+    closedCount = 0,
+    realizedClosedTotal = 0,
+    closedSinceDate = null,
     currency = "USD",
   }: Props = $props();
+
+  const showClosed = $derived(closedCount > 0);
 </script>
 
-<div class="panel">
+<div class="panel" class:five={showClosed}>
   <div class="tile">
     <div class="eyebrow">Unrealized P&amp;L</div>
     <div class="big {toneOf(totalUnrealized)}">{fmtMoney(totalUnrealized, currency)}</div>
@@ -67,6 +79,22 @@
     </div>
     <div class="foot">{carryInExcluded} carry-in excluded</div>
   </div>
+
+  {#if showClosed}
+    <div class="tile">
+      <div class="eyebrow">Total Closed</div>
+      <div class="open-line">
+        <span class="open-num">{closedCount}</span>
+        <span class="open-unit">closed</span>
+      </div>
+      <div class="breakdown">
+        <span class="chip {toneOf(realizedClosedTotal)}">{fmtMoney(realizedClosedTotal, currency)} realized</span>
+      </div>
+      {#if closedSinceDate}
+        <div class="foot">Opened on/after {fmtDayYear(closedSinceDate)}</div>
+      {/if}
+    </div>
+  {/if}
 </div>
 
 <style>
@@ -77,6 +105,9 @@
     border: 1px solid var(--border-05);
     border-radius: var(--radius-lg);
     overflow: hidden;
+  }
+  .panel.five {
+    grid-template-columns: repeat(5, 1fr);
   }
   .tile {
     padding: 20px 24px;
@@ -151,6 +182,18 @@
   .chip.partial {
     color: var(--amber);
     background: var(--amber-bg);
+  }
+  .chip.pos {
+    color: var(--up);
+    background: var(--up-bg);
+  }
+  .chip.neg {
+    color: var(--dn);
+    background: var(--dn-bg);
+  }
+  .chip.flat {
+    color: var(--text);
+    background: var(--surface-04);
   }
   .foot {
     font-size: var(--text-2xs);

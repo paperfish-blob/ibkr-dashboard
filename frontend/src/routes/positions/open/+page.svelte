@@ -468,6 +468,9 @@
         {fullCount}
         {partialCount}
         {carryInExcluded}
+        closedCount={$posIncludeRealized ? closedRows.length : 0}
+        {realizedClosedTotal}
+        closedSinceDate={boundaryDate}
         {currency}
       />
       <div class="gap"></div>
