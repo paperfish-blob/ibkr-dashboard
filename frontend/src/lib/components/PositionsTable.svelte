@@ -131,6 +131,17 @@
     isWeekend: boolean;
   }
   const WEEKDAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const WEEKDAY_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  /** Which weekday a date fell on -- shown next to every date this table
+   *  displays (day bands, and each row's own Date/Exit Date/leg date) so a
+   *  gap's Mon/Tue/Wed breakdown isn't the only place that context shows up. */
+  function weekdayAbbr(iso: string): string {
+    return WEEKDAY_ABBR[parseISODay(iso).getDay()];
+  }
+  function weekdayFull(iso: string): string {
+    return WEEKDAY_FULL[parseISODay(iso).getDay()];
+  }
+
   /** Every calendar day strictly after the older date through the newer
    *  date -- the same walk tradingDayGap does, but keeping each day instead
    *  of just the count, for the hover tooltip's Mon/Tue/Wed breakdown. */
@@ -193,7 +204,10 @@
           {#each displayGroups as group, gi (group.date + group.rows[0].i)}
             {@const groupTotal = group.rows.reduce((sum, { p }) => sum + (p.realized_pnl === null ? 0 : num(p.realized_pnl)), 0)}
             <tr class="day-row">
-              <td class="day-date" colspan={dayRowSpan}>{group.date ? fmtFullDate(group.date) : EM_DASH}</td>
+              <td class="day-date" colspan={dayRowSpan}>
+                {group.date ? fmtFullDate(group.date) : EM_DASH}
+                {#if group.date}<span class="wd">&middot; {weekdayFull(group.date)}</span>{/if}
+              </td>
               <td class="day-count num">{group.rows.length}</td>
               <td class="day-total num {toneOf(groupTotal)}">{fmtMoney(groupTotal, currency)}</td>
             </tr>
@@ -239,7 +253,10 @@
                 </span>
               </td>
               <td class="num">{p.exit_count || EM_DASH}</td>
-              <td class="full-date">{p.open_date ? fmtFullDate(p.open_date) : EM_DASH}</td>
+              <td class="full-date">
+                {p.open_date ? fmtFullDate(p.open_date) : EM_DASH}
+                {#if p.open_date}<span class="wd-abbr">{weekdayAbbr(p.open_date)}</span>{/if}
+              </td>
               <td class="dim">{p.open_time || EM_DASH}</td>
               <td class="num dash">{EM_DASH}</td>
               <td>
@@ -249,7 +266,10 @@
               <td class="num">{p.entry_price !== null ? fmtPriceLike(num(p.entry_price), currency, 4) : EM_DASH}</td>
               <td class="num">{entryAmount !== null ? fmtPriceLike(entryAmount, currency, 2) : EM_DASH}</td>
               <td class="num dim">{num(p.commission) !== 0 ? fmtPriceLike(Math.abs(num(p.commission)), currency, 2) : EM_DASH}</td>
-              <td class="full-date {p.exit_date ? '' : 'dash'}">{p.exit_date ? fmtFullDate(p.exit_date) : EM_DASH}</td>
+              <td class="full-date {p.exit_date ? '' : 'dash'}">
+                {p.exit_date ? fmtFullDate(p.exit_date) : EM_DASH}
+                {#if p.exit_date}<span class="wd-abbr">{weekdayAbbr(p.exit_date)}</span>{/if}
+              </td>
               <td class="num dash">{EM_DASH}</td>
               <td class="num pnl {p.realized_pnl === null ? '' : toneOf(num(p.realized_pnl))}">
                 {p.realized_pnl === null ? "open" : fmtMoney(num(p.realized_pnl), currency)}
@@ -264,7 +284,7 @@
                   <td></td>
                   <td></td>
                   <td class="leg-label">Exit {n}</td>
-                  <td class="full-date">{fmtFullDate(leg.trade_date)}</td>
+                  <td class="full-date">{fmtFullDate(leg.trade_date)} <span class="wd-abbr">{weekdayAbbr(leg.trade_date)}</span></td>
                   <td class="dim">{leg.trade_time || EM_DASH}</td>
                   <td class="num dim order-id">{leg.ib_order_id || EM_DASH}</td>
                   <td>
@@ -411,6 +431,13 @@
   td.full-date.dash {
     color: var(--dim-35);
   }
+  .wd-abbr {
+    font-weight: var(--weight-medium);
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--dim-35);
+    margin-left: 3px;
+  }
 
   /* Day group header: a full-width band carrying the date and that day's net. */
   .day-row td {
@@ -428,6 +455,12 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--dim-70);
+  }
+  .day-date .wd {
+    font-weight: var(--weight-medium);
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--dim-35);
   }
   .day-count {
     font-size: var(--text-2xs);

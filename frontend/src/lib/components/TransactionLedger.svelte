@@ -18,6 +18,7 @@
     fmtPriceLike,
     fmtQty,
     num,
+    parseISODay,
     sideClass,
     sideLabel,
     toneOf,
@@ -83,6 +84,13 @@
       is_realizing: fills.some((f) => f.is_realizing),
       fillCount: fills.length,
     };
+  }
+
+  const WEEKDAY_FULL = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  /** Which weekday a day band fell on -- shown next to its date, same
+   *  treatment as PositionsTable's day bands. */
+  function weekdayFull(iso: string): string {
+    return WEEKDAY_FULL[parseISODay(iso).getDay()];
   }
 
   const visible = $derived(
@@ -182,7 +190,10 @@
           {#each displayDays as day (day.date)}
             {@const dayTone = toneOf(num(day.total_pnl))}
             <tr class="day-row">
-              <td class="day-date" colspan={dayRowSpan}>{fmtFullDate(day.date)}</td>
+              <td class="day-date" colspan={dayRowSpan}>
+                {fmtFullDate(day.date)}
+                <span class="wd">&middot; {weekdayFull(day.date)}</span>
+              </td>
               <td class="day-count num">{day.trades.length}</td>
               <td class="day-total num {dayTone}">{fmtMoney(num(day.total_pnl), currency)}</td>
             </tr>
@@ -367,6 +378,12 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--dim-70);
+  }
+  .day-date .wd {
+    font-weight: var(--weight-medium);
+    text-transform: none;
+    letter-spacing: normal;
+    color: var(--dim-35);
   }
   .day-count {
     font-size: var(--text-2xs);
