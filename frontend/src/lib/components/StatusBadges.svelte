@@ -13,13 +13,17 @@
   import type { GatewayState, TodaySource } from "$lib/api";
 
   interface Props {
-    gateway: GatewayState;
     flexOk: boolean;
     flexFetchedAt: string | null;
-    tradeCount: number;
+    gateway?: GatewayState;
+    tradeCount?: number;
     todaySource?: TodaySource;
+    /** Current-price freshness -- only Open Positions polls market data, so
+     *  this stays undefined everywhere else. `null` = polling but nothing
+     *  fetched yet. */
+    marketFetchedAt?: string | null;
   }
-  let { gateway, flexOk, flexFetchedAt, tradeCount, todaySource }: Props = $props();
+  let { flexOk, flexFetchedAt, gateway, tradeCount, todaySource, marketFetchedAt }: Props = $props();
 </script>
 
 <div class="badges">
@@ -27,22 +31,34 @@
     <span class="badge-label">Flex</span>
     {#if flexOk}
       <span class="badge-val">{fmtTime(flexFetchedAt)}</span>
-      <span class="badge-age">{tradeCount.toLocaleString()} trades</span>
+      {#if tradeCount !== undefined}
+        <span class="badge-age">{tradeCount.toLocaleString()} trades</span>
+      {/if}
     {:else}
       <span class="badge-val">unavailable</span>
     {/if}
   </span>
 
-  <span
-    class="badge ghost"
-    class:live={gateway.connected}
-    title={gateway.connected
-      ? `Live P&L for account ${gateway.account}`
-      : "IB Gateway is not running — today's figure falls back to Flex"}
-  >
-    <span class="badge-label">Gateway</span>
-    <span class="badge-val">{gateway.connected ? fmtTime(gateway.updated_at) : "disconnected"}</span>
-  </span>
+  {#if marketFetchedAt !== undefined}
+    <span class="badge ghost" class:live={marketFetchedAt !== null} title="Current prices, refreshed every 5 minutes">
+      {#if marketFetchedAt !== null}<span class="live-dot"></span>{/if}
+      <span class="badge-label">Market</span>
+      <span class="badge-val">{marketFetchedAt ? fmtTime(marketFetchedAt) : "…"}</span>
+    </span>
+  {/if}
+
+  {#if gateway}
+    <span
+      class="badge ghost"
+      class:live={gateway.connected}
+      title={gateway.connected
+        ? `Live P&L for account ${gateway.account}`
+        : "IB Gateway is not running — today's figure falls back to Flex"}
+    >
+      <span class="badge-label">Gateway</span>
+      <span class="badge-val">{gateway.connected ? fmtTime(gateway.updated_at) : "disconnected"}</span>
+    </span>
+  {/if}
 
   {#if todaySource}
     <span class="badge ghost" title="Which source today's figure came from">
@@ -116,5 +132,24 @@
   .badge.warn .badge-val {
     color: var(--over);
     font-weight: var(--weight-bold);
+  }
+
+  @keyframes pulse {
+    0%,
+    100% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    50% {
+      opacity: 0.35;
+      transform: scale(0.7);
+    }
+  }
+  .live-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--radius-pill);
+    background: var(--up);
+    animation: pulse 1.6s ease-in-out infinite;
   }
 </style>

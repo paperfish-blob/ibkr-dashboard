@@ -33,20 +33,35 @@
   const PAD_BOTTOM = 6;
   const PLOT_H = 78;
 
+  // One id suffix per card instance -- several of these cards render on the
+  // same page at once, and SVG clipPath ids have to be unique in the DOM or
+  // every card's clip starts referencing whichever one happened to render
+  // last.
+  const uid = Math.random().toString(36).slice(2);
+
+  // Domain always includes 0, even for a series that's e.g. entirely
+  // negative -- that's what makes yZero (below) a real point on the chart
+  // rather than an extrapolation, so the zero-crossing coloring and the
+  // reference line land where they actually should.
   const shape = $derived.by(() => {
     const series = p.series;
     if (series.length === 0) return null;
     const values = series.map((pt) => pt.value);
-    const min = Math.min(...values);
-    const max = Math.max(...values);
+    const min = Math.min(0, ...values);
+    const max = Math.max(0, ...values);
     const span = max - min || 1;
     const n = series.length;
     const xOf = (i: number) => (n === 1 ? 0 : (i / (n - 1)) * VIEW_W);
     const yOf = (v: number) => VIEW_H - PAD_BOTTOM - ((v - min) / span) * PLOT_H;
+    const yZero = yOf(0);
     const path = series
       .map((pt, i) => `${i === 0 ? "M" : "L"}${xOf(i).toFixed(1)},${yOf(pt.value).toFixed(1)}`)
       .join(" ");
-    return { path, xOf, yOf, n };
+    // The line, closed back along the zero baseline rather than the chart's
+    // bottom edge -- fill above zero reads as "how far up", fill below
+    // reads as "how far down", instead of both filling to the floor.
+    const areaPath = `${path} L${xOf(n - 1).toFixed(1)},${yZero.toFixed(1)} L${xOf(0).toFixed(1)},${yZero.toFixed(1)} Z`;
+    return { path, areaPath, xOf, yOf, yZero, n };
   });
 
   let containerEl = $state<HTMLDivElement | undefined>();
@@ -115,7 +130,15 @@
       aria-label="Potential P&L sparkline for {p.row.p.symbol}"
     >
       <svg viewBox="0 0 {VIEW_W} {VIEW_H}" preserveAspectRatio="none">
-        <path d={shape.path} fill="none" stroke={cssVar(last >= 0 ? "--up" : "--dn")} stroke-width="1.6" />
+        <defs>
+          <clipPath id="spark-above-{uid}"><rect x="0" y="0" width={VIEW_W} height={shape.yZero} /></clipPath>
+          <clipPath id="spark-below-{uid}"><rect x="0" y={shape.yZero} width={VIEW_W} height={VIEW_H - shape.yZero} /></clipPath>
+        </defs>
+        <path d={shape.areaPath} fill={cssVar("--up-bg")} clip-path="url(#spark-above-{uid})" />
+        <path d={shape.areaPath} fill={cssVar("--dn-bg")} clip-path="url(#spark-below-{uid})" />
+        <line x1="0" x2={VIEW_W} y1={shape.yZero} y2={shape.yZero} stroke={toRgba("--ink-rgb", 0.12)} stroke-width="1" stroke-dasharray="2,2" />
+        <path d={shape.path} fill="none" stroke={cssVar("--up")} stroke-width="1.6" clip-path="url(#spark-above-{uid})" />
+        <path d={shape.path} fill="none" stroke={cssVar("--dn")} stroke-width="1.6" clip-path="url(#spark-below-{uid})" />
         {#if hoverXY}
           <line
             x1={hoverXY.x}
@@ -129,7 +152,7 @@
             cx={hoverXY.x}
             cy={hoverXY.y}
             r="3"
-            fill={cssVar(last >= 0 ? "--up" : "--dn")}
+            fill={cssVar(hoverPoint && hoverPoint.value >= 0 ? "--up" : "--dn")}
             stroke={cssVar("--surface")}
             stroke-width="1.5"
           />

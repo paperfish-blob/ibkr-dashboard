@@ -19,6 +19,7 @@
   import AlertBar from "$lib/components/AlertBar.svelte";
   import SegToggle from "$lib/components/SegToggle.svelte";
   import Switch from "$lib/components/Switch.svelte";
+  import StatusBadges from "$lib/components/StatusBadges.svelte";
   import PotentialPnlPanel from "$lib/components/PotentialPnlPanel.svelte";
   import type { PositionSeries } from "$lib/components/PotentialPnlPanel.svelte";
   import OpenPositionsSummary from "$lib/components/OpenPositionsSummary.svelte";
@@ -73,7 +74,7 @@
   async function handleRefresh() {
     refreshing = true;
     try {
-      await refreshPositions();
+      await Promise.all([refreshPositions(), refreshMarketData()]);
     } finally {
       refreshing = false;
     }
@@ -129,10 +130,32 @@
   // Full daily history per distinct symbol, back to that position's own
   // open date (not just a handful of recent days) -- needed for the
   // potential-P&L-over-time chart below, and its last bar doubles as the
-  // "current price" the table itself uses. Cached for the session, same
-  // OHLCV endpoint the detail page's own chart already uses.
+  // "current price" the table itself uses. Same OHLCV endpoint the detail
+  // page's own chart already uses -- now cached 60s server-side (see
+  // market_data.py) so this page's own polling below doesn't multiply into
+  // real Yahoo Finance load per browser tab.
   let historyBars = $state<Map<string, OHLCVBar[]>>(new Map());
   let historyFailed = $state<Set<string>>(new Set());
+  let marketFetchedAt = $state<string | null>(null);
+
+  async function fetchOneSymbol(symbol: string, lookbackDays: number): Promise<void> {
+    try {
+      const res = await api.marketDataOhlcv(symbol, lookbackDays);
+      if (res.ok && res.bars.length) {
+        historyBars = new Map(historyBars).set(symbol, res.bars);
+        if (historyFailed.has(symbol)) {
+          const next = new Set(historyFailed);
+          next.delete(symbol);
+          historyFailed = next;
+        }
+        marketFetchedAt = new Date().toISOString();
+      } else {
+        historyFailed = new Set(historyFailed).add(symbol);
+      }
+    } catch {
+      historyFailed = new Set(historyFailed).add(symbol);
+    }
+  }
 
   $effect(() => {
     const wanted = yearFilteredPositions
@@ -141,19 +164,53 @@
     if (wanted.length === 0) return;
     (async () => {
       for (const { symbol, lookbackDays } of wanted) {
-        try {
-          const res = await api.marketDataOhlcv(symbol, lookbackDays);
-          if (res.ok && res.bars.length) {
-            historyBars = new Map(historyBars).set(symbol, res.bars);
-          } else {
-            historyFailed = new Set(historyFailed).add(symbol);
-          }
-        } catch {
-          historyFailed = new Set(historyFailed).add(symbol);
-        }
+        await fetchOneSymbol(symbol, lookbackDays);
       }
     })();
   });
+
+  // Re-fetches every symbol currently on the page -- not just newly-seen
+  // ones, unlike the effect above -- so Current Price / Unrealized P&L
+  // don't sit frozen at whatever they were on load for the length of a
+  // session. Open Positions is the only page that polls market data at
+  // all; it's the only one where a live-ish current price actually
+  // matters. Fixed at 5 minutes rather than user-configurable -- fast
+  // enough to matter, slow enough to stay well inside what an unofficial
+  // Yahoo Finance API can be trusted to absorb (see market_data.py's
+  // cache, which this still benefits from if other tabs/pages poll too).
+  const MARKET_POLL_SEC = 5 * 60;
+  let marketSecondsLeft = $state(MARKET_POLL_SEC);
+  let marketRefreshing = $state(false);
+
+  async function refreshMarketData(): Promise<void> {
+    marketRefreshing = true;
+    try {
+      const wanted = yearFilteredPositions
+        .filter((p) => p.open_date)
+        .map((p) => ({ symbol: p.symbol, lookbackDays: daysSince(p.open_date!) + 5 }));
+      for (const { symbol, lookbackDays } of wanted) {
+        await fetchOneSymbol(symbol, lookbackDays);
+      }
+    } finally {
+      marketRefreshing = false;
+      marketSecondsLeft = MARKET_POLL_SEC;
+    }
+  }
+
+  onMount(() => {
+    const id = setInterval(() => {
+      if (marketSecondsLeft > 0) marketSecondsLeft -= 1;
+      if (marketSecondsLeft === 0) refreshMarketData();
+    }, 1000);
+    return () => clearInterval(id);
+  });
+
+  const marketCountdownLabel = $derived.by(() => {
+    const m = Math.floor(marketSecondsLeft / 60);
+    const s = marketSecondsLeft % 60;
+    return `${m}:${String(s).padStart(2, "0")}`;
+  });
+  const marketProgressPct = $derived((marketSecondsLeft / MARKET_POLL_SEC) * 100);
 
   function toRow(p: Position): OpenPositionsRow {
     // For an open, non-carry-in position the backend already nets exits
@@ -402,6 +459,9 @@
     {refreshing}
   >
     {#snippet right()}
+      {#if $positions}
+        <StatusBadges flexOk={$positions.flex_ok} flexFetchedAt={$positions.flex_fetched_at} {marketFetchedAt} />
+      {/if}
       <Switch
         checked={$posIncludeRealized}
         label="Include realized"
@@ -449,6 +509,14 @@
     {#if rows.length === 0}
       <div class="panel-empty">No open positions right now.</div>
     {:else}
+      <div class="market-poll-row">
+        <span class="market-poll-label">Current prices auto-refresh every 5 min &middot; this page only</span>
+        <span class="market-poll-countdown">{marketRefreshing ? "Refreshing…" : `Next refresh in ${marketCountdownLabel}`}</span>
+      </div>
+      <div class="market-poll-bar">
+        <div class="market-poll-fill" style="width: {marketRefreshing ? 100 : marketProgressPct}%"></div>
+      </div>
+      <div class="gap"></div>
       {#if $posIncludeRealized}
         <TotalPnlHero
           total={totalPnl}
@@ -544,6 +612,39 @@
     background: var(--amber-bg);
     color: var(--amber);
     margin-left: 6px;
+  }
+  .market-poll-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .market-poll-label {
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--dim-55);
+  }
+  .market-poll-countdown {
+    font-size: var(--text-xs);
+    font-weight: var(--weight-bold);
+    font-variant-numeric: tabular-nums;
+    color: var(--accent);
+    white-space: nowrap;
+  }
+  .market-poll-bar {
+    margin-top: 6px;
+    height: 3px;
+    border-radius: var(--radius-pill);
+    background: var(--accent-bg);
+    overflow: hidden;
+  }
+  .market-poll-fill {
+    height: 100%;
+    border-radius: var(--radius-pill);
+    background: var(--accent);
+    transition: width 1s linear;
   }
   .gap {
     height: 16px;

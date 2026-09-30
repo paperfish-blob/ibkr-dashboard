@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import math
+import time
 from datetime import date, timedelta
 from typing import Callable
 
@@ -19,6 +20,18 @@ from ..models import MarketDataResult, OHLCVBar, SplitsResult, StockSplit
 
 HistoryFetcher = Callable[[str, int], list[OHLCVBar]]
 SplitsFetcher = Callable[[str], list[StockSplit]]
+
+# Every browser tab polling Open Positions hits this endpoint independently --
+# with no cache, N tabs times M symbols is N*M real Yahoo requests on the same
+# poll tick, well past what an unofficial, undocumented API can be trusted to
+# absorb without a 429 or a temporary IP block. A short in-memory TTL cache
+# means the actual Yahoo request rate stops scaling with how many tabs/users
+# are open. Keyed on (ticker, lookback_days) since that's the full input to
+# _fetch_history; only applies to real Yahoo calls (history_fetcher is None)
+# so tests substituting a fake fetcher -- which all of them do -- always get
+# a fresh, deterministic call rather than a stale cached result.
+_CACHE_TTL_SECONDS = 60
+_cache: dict[tuple[str, int], tuple[float, MarketDataResult]] = {}
 
 
 # A handful of IBKR CFD tickers, once the CFD suffix is stripped, still
@@ -100,8 +113,16 @@ async def fetch_ohlcv(
     history_fetcher: HistoryFetcher | None = None,
 ) -> MarketDataResult:
     """Daily bars for one symbol, ascending by date. `history_fetcher` exists
-    only so tests can substitute a fake instead of hitting Yahoo Finance."""
+    only so tests can substitute a fake instead of hitting Yahoo Finance --
+    passing one also opts out of the cache below, so tests always see their
+    own fetcher run."""
     ticker = plain_ticker(symbol)
+    use_cache = history_fetcher is None
+    cache_key = (ticker, lookback_days)
+    if use_cache:
+        cached = _cache.get(cache_key)
+        if cached is not None and time.monotonic() - cached[0] < _CACHE_TTL_SECONDS:
+            return cached[1]
     fetcher = history_fetcher or _fetch_history
     try:
         bars = await asyncio.to_thread(fetcher, ticker, lookback_days)
@@ -109,7 +130,10 @@ async def fetch_ohlcv(
         return MarketDataResult(ok=False, symbol=ticker, error=f"Yahoo Finance lookup failed: {exc}")
     if not bars:
         return MarketDataResult(ok=False, symbol=ticker, error=f"No price history found for {ticker}")
-    return MarketDataResult(ok=True, symbol=ticker, bars=bars)
+    result = MarketDataResult(ok=True, symbol=ticker, bars=bars)
+    if use_cache:
+        _cache[cache_key] = (time.monotonic(), result)
+    return result
 
 
 def _fetch_splits(ticker: str) -> list[StockSplit]:
