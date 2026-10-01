@@ -43,8 +43,12 @@
     positions: PositionSeries[];
     combinedSeries: CumulativePoint[];
     currency?: string;
+    /** Whether combinedSeries has closed positions folded in -- changes
+     *  only the Combined view's caption; positions (the by-position/
+     *  normalized card data) stays open-only regardless. */
+    includesClosed?: boolean;
   }
-  let { positions, combinedSeries, currency = "USD" }: Props = $props();
+  let { positions, combinedSeries, currency = "USD", includesClosed = false }: Props = $props();
 
   const CHART_H = 220;
   const NORM_PALETTE = ["--accent", "--ai", "--amber", "--up", "--dn"];
@@ -315,7 +319,9 @@
       <div class="caption">
         {#if view === "combined"}
           What closing everything at that day's close would have looked like, summed across every position currently
-          open &middot; includes realized P&amp;L already locked in by any partial exits
+          open{#if includesClosed}, plus every closed position folded into the window{/if} &middot; includes realized
+          P&amp;L already locked in by any partial exits{#if includesClosed} or by positions fully closed within the
+          window{/if}
         {:else if view === "byposition"}
           Same day-by-day calculation, one position at a time
         {:else if view === "normalized"}

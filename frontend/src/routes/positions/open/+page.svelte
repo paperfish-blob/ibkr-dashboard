@@ -138,7 +138,19 @@
   let historyFailed = $state<Set<string>>(new Set());
   let marketFetchedAt = $state<string | null>(null);
 
+  // Deliberately not $state -- this exists only to stop fetchOneSymbol from
+  // firing a duplicate request for a symbol that's already in flight; it
+  // shouldn't itself be a reason for the effect below to re-run. Without
+  // this guard, each symbol's fetch resolving mutates historyBars, which
+  // re-triggers the effect, which recomputes "wanted" and still includes
+  // every symbol that hasn't resolved *yet* -- spawning a new overlapping
+  // fetch loop on top of the one still running, cascading into several
+  // duplicate requests for whichever symbol happens to resolve last.
+  const pendingSymbols = new Set<string>();
+
   async function fetchOneSymbol(symbol: string, lookbackDays: number): Promise<void> {
+    if (pendingSymbols.has(symbol)) return;
+    pendingSymbols.add(symbol);
     try {
       const res = await api.marketDataOhlcv(symbol, lookbackDays);
       if (res.ok && res.bars.length) {
@@ -154,13 +166,39 @@
       }
     } catch {
       historyFailed = new Set(historyFailed).add(symbol);
+    } finally {
+      pendingSymbols.delete(symbol);
     }
   }
 
+  // The deepest lookback any position sharing a symbol actually needs --
+  // historyBars is keyed by symbol alone, so if e.g. a closed PURRn position
+  // from three weeks ago and a currently-open PURRn opened yesterday both
+  // fetched under their own, different lookbackDays, whichever fetched
+  // second would just reuse the first's (possibly too-shallow) bars rather
+  // than fetching its own. Fetching once per symbol at the widest window
+  // any of its positions need avoids that -- extra leading history is
+  // harmless, since potentialPnlSeries only walks forward from each
+  // position's own open_date anyway.
+  function maxLookbackPerSymbol(positionsList: Position[]): Map<string, number> {
+    const result = new Map<string, number>();
+    for (const p of positionsList) {
+      if (!p.open_date) continue;
+      const lookback = daysSince(p.open_date) + 5;
+      const existing = result.get(p.symbol);
+      if (existing === undefined || lookback > existing) result.set(p.symbol, lookback);
+    }
+    return result;
+  }
+
   $effect(() => {
-    const wanted = yearFilteredPositions
-      .filter((p) => p.open_date && !historyBars.has(p.symbol) && !historyFailed.has(p.symbol))
-      .map((p) => ({ symbol: p.symbol, lookbackDays: daysSince(p.open_date!) + 5 }));
+    // Closed positions' bars are only needed once "Include realized" is on
+    // -- their value never changes once fetched (fully closed = no more
+    // mark-to-market, no need for the periodic refresh below to touch them).
+    const relevant = $posIncludeRealized ? [...yearFilteredPositions, ...closedInWindow] : yearFilteredPositions;
+    const wanted = [...maxLookbackPerSymbol(relevant)]
+      .filter(([symbol]) => !historyBars.has(symbol) && !historyFailed.has(symbol) && !pendingSymbols.has(symbol))
+      .map(([symbol, lookbackDays]) => ({ symbol, lookbackDays }));
     if (wanted.length === 0) return;
     (async () => {
       for (const { symbol, lookbackDays } of wanted) {
@@ -185,10 +223,7 @@
   async function refreshMarketData(): Promise<void> {
     marketRefreshing = true;
     try {
-      const wanted = yearFilteredPositions
-        .filter((p) => p.open_date)
-        .map((p) => ({ symbol: p.symbol, lookbackDays: daysSince(p.open_date!) + 5 }));
-      for (const { symbol, lookbackDays } of wanted) {
+      for (const [symbol, lookbackDays] of maxLookbackPerSymbol(yearFilteredPositions)) {
         await fetchOneSymbol(symbol, lookbackDays);
       }
     } finally {
@@ -411,7 +446,9 @@
   // Every open position's own day-by-day series, kept per-row (rather than
   // summed right away) so the Potential P&L panel can also chart one
   // position at a time or normalize them onto a shared axis -- see
-  // PotentialPnlPanel.svelte.
+  // PotentialPnlPanel.svelte. Stays open-only (never includes closed
+  // positions) -- it feeds the By position/Normalized tabs and the
+  // per-position card grid, which are about current holdings, not history.
   const positionSeries = $derived.by((): PositionSeries[] =>
     rows
       .map((row) => {
@@ -421,11 +458,31 @@
       .filter((p): p is PositionSeries => p !== null && p.series.length > 0),
   );
 
-  // Union of every position's own series, forward-filled per symbol so a
-  // day one symbol didn't trade on (or hasn't opened as of yet) still
-  // contributes its last-known value rather than a gap in the sum.
+  // Closed positions' own day-by-day series, same calculation as open ones
+  // -- once a position's fully exited, potentialPnlSeries naturally
+  // flattens at its final realized value (qty drops to 0, so the
+  // mark-to-market term zeroes out) rather than needing separate handling.
+  // Only computed once "Include realized" is on, matching TotalPnlHero and
+  // OpenPositionsSummary's own gating. Not wrapped as PositionSeries (no
+  // OpenPositionsRow to put in `row`) since this only ever feeds the
+  // combined sum below, never the by-position views.
+  const closedSeriesList = $derived.by((): DayPoint[][] =>
+    $posIncludeRealized
+      ? closedInWindow
+          .map((p) => {
+            const bars = historyBars.get(p.symbol);
+            return bars ? potentialPnlSeries(p, bars) : [];
+          })
+          .filter((series) => series.length > 0)
+      : [],
+  );
+
+  // Union of every open position's series, plus every closed position's
+  // when included, forward-filled per symbol so a day one symbol didn't
+  // trade on (or hasn't opened as of yet) still contributes its last-known
+  // value rather than a gap in the sum.
   const combinedSeries = $derived.by((): CumulativePoint[] => {
-    const perPosition = positionSeries.map((p) => p.series);
+    const perPosition = [...positionSeries.map((p) => p.series), ...closedSeriesList];
     if (perPosition.length === 0) return [];
 
     const dateSet = new Set<string>();
@@ -543,7 +600,7 @@
       />
       <div class="gap"></div>
       {#if positionSeries.length > 0}
-        <PotentialPnlPanel positions={positionSeries} {combinedSeries} {currency} />
+        <PotentialPnlPanel positions={positionSeries} {combinedSeries} includesClosed={$posIncludeRealized} {currency} />
         <div class="gap"></div>
       {/if}
       <OpenPositionCountPanel positions={yearFilteredPositions} />
