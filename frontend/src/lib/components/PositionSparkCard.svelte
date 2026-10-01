@@ -251,9 +251,14 @@
     width: 100%;
     height: 68px;
   }
+  /* Anchored below the chart, not above -- .card-sub sits right on top of
+     .spark with only 4px of margin, so "above" always lands on the card's
+     own headline number and status line rather than blank space. Below at
+     least has the card's own bottom padding as a margin before it reaches
+     another card. */
   .spark-tip {
     position: absolute;
-    top: -6px;
+    top: 100%;
     pointer-events: none;
     background: var(--surface);
     border: 1px solid var(--border);
@@ -262,7 +267,7 @@
     font-size: var(--text-2xs);
     box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
     --edge-offset: 0px;
-    transform: translate(calc(-50% + var(--edge-offset)), -100%);
+    transform: translate(calc(-50% + var(--edge-offset)), 6px);
     white-space: nowrap;
     z-index: 5;
   }
