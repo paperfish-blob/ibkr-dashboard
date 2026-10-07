@@ -108,16 +108,15 @@
   /** How many trading days elapsed between one day band and the previous
    *  one -- weekends never count, since the market isn't open then anyway,
    *  so a Friday -> Monday pair of trades shouldn't read as a 3-day gap.
-   *  Counts every weekday from the older date (exclusive) through the newer
-   *  date (inclusive), so two trades on consecutive weekdays show a 1-day
-   *  gap rather than 0 -- "how many trading days had passed by the time the
-   *  next trade happened," not "how many days sat idle in between." */
+   *  Counts every weekday strictly between the two dates, so trades on
+   *  consecutive trading days (or Friday -> Monday) show no gap -- it's how
+   *  many trading days sat idle in between. */
   function tradingDayGap(newer: string, older: string): number {
     let count = 0;
     const cursor = parseISODay(older);
     const end = parseISODay(newer);
     cursor.setDate(cursor.getDate() + 1);
-    while (cursor <= end) {
+    while (cursor < end) {
       const wd = cursor.getDay();
       if (wd !== 0 && wd !== 6) count++;
       cursor.setDate(cursor.getDate() + 1);
@@ -142,15 +141,14 @@
     return WEEKDAY_FULL[parseISODay(iso).getDay()];
   }
 
-  /** Every calendar day strictly after the older date through the newer
-   *  date -- the same walk tradingDayGap does, but keeping each day instead
+  /** Every calendar day strictly between the two dates -- the same walk tradingDayGap does, but keeping each day instead
    *  of just the count, for the hover tooltip's Mon/Tue/Wed breakdown. */
   function gapDayBreakdown(newer: string, older: string): GapDay[] {
     const days: GapDay[] = [];
     const cursor = parseISODay(older);
     const end = parseISODay(newer);
     cursor.setDate(cursor.getDate() + 1);
-    while (cursor <= end) {
+    while (cursor < end) {
       const wd = cursor.getDay();
       days.push({ abbr: WEEKDAY_ABBR[wd], dateNum: cursor.getDate(), isWeekend: wd === 0 || wd === 6 });
       cursor.setDate(cursor.getDate() + 1);
@@ -159,10 +157,10 @@
   }
 
   /** "All" by default -- "all" and up show every gap of at least that many
-   *  trading days; "off" shows none. */
+   *  trading days (0 included, as a "consecutive" marker); "off" shows none. */
   type GapFilter = "off" | "all" | "3" | "7";
   let gapFilter = $state<GapFilter>("all");
-  const minGapDays = $derived(gapFilter === "off" ? null : gapFilter === "all" ? 1 : Number(gapFilter));
+  const minGapDays = $derived(gapFilter === "off" ? null : gapFilter === "all" ? 0 : Number(gapFilter));
   const GAP_OPTIONS = [
     { label: "All", value: "all" },
     { label: "Off", value: "off" },
@@ -307,10 +305,13 @@
             {@const gap = tradingDayGap(group.date, displayGroups[gi + 1].date)}
             {#if gap >= minGapDays}
               {@const days = gapDayBreakdown(group.date, displayGroups[gi + 1].date)}
-              <tr class="gap-row">
+              <tr class="gap-row" class:consecutive={gap === 0}>
                 <td colspan={totalCols}>
                   <div class="gap-line">
                     <span class="gap-rule"></span>
+                    {#if gap === 0}
+                      <span class="gap-pill"><span class="gap-dot"></span>Consecutive trading days</span>
+                    {:else}
                     <button type="button" class="gap-hover">
                       <span class="gap-pill"
                         ><span class="gap-dot"></span>{gap} trading day{gap === 1 ? "" : "s"} without a trade</span
@@ -331,6 +332,7 @@
                         <span class="gap-tip-arrow"></span>
                       </span>
                     </button>
+                    {/if}
                     <span class="gap-rule"></span>
                   </div>
                 </td>
@@ -641,6 +643,17 @@
     letter-spacing: 0.03em;
     color: var(--amber);
     white-space: nowrap;
+  }
+  .consecutive .gap-rule {
+    border-top-color: var(--border);
+  }
+  .consecutive .gap-pill {
+    background: var(--surface-alt);
+    border-color: var(--border);
+    color: var(--text-muted);
+  }
+  .consecutive .gap-dot {
+    background: var(--text-muted);
   }
   .gap-dot {
     width: 5px;
