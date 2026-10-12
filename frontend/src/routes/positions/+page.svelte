@@ -29,6 +29,8 @@
     posDateFrom,
     posDateTo,
     posAssetCategories,
+    posStreakIncludePartial,
+    posStreakLossLines,
     type PosFilter,
     type PosGroupBy,
   } from "$lib/stores";
@@ -63,6 +65,9 @@
     const dateTo = qs.get("dateTo");
     if (dateTo && /^\d{4}-\d{2}-\d{2}$/.test(dateTo)) posDateTo.set(dateTo);
 
+    const partials = qs.get("partials");
+    if (partials === "0" || partials === "1") posStreakIncludePartial.set(partials === "1");
+
     const assetCat = qs.get("assetCat");
     if (assetCat) posAssetCategories.set(assetCat.split(",").filter(Boolean));
   }
@@ -77,6 +82,7 @@
     posDateFrom.set(null);
     posDateTo.set(null);
     posAssetCategories.set([]);
+    posStreakIncludePartial.set(true);
   }
 
   // Seed filters from the URL once, on load. The sync effect below never
@@ -139,6 +145,7 @@
     if ($posDateFrom) parts.push(`dateFrom=${$posDateFrom}`);
     if ($posDateTo) parts.push(`dateTo=${$posDateTo}`);
     if ($posAssetCategories.length > 0) parts.push(`assetCat=${$posAssetCategories.join(",")}`);
+    if (!$posStreakIncludePartial) parts.push("partials=0");
 
     const qs = parts.join("&");
     goto(qs ? `/positions?${qs}` : "/positions", {
@@ -231,13 +238,19 @@
 
   // Consecutive-outcome runs across whatever's currently filtered (Symbol,
   // Side, Date range, Category, Carry-in -- posFilter too, so "Open only"
-  // correctly shows no runs rather than a stale one, since an open position
-  // has no outcome yet to extend or break a streak), walked in the same
-  // chronological order (and same same-day tiebreak) as buildStreaks on
-  // the Positions Overview page's Monthly panel -- except every run
-  // becomes its own bar here instead of only the month's biggest surviving.
-  // A flat ($0) position breaks a streak without starting a new one.
-  function buildStreakRuns(all: Position[], groupBy: PosGroupBy): StreakRun[] {
+  // shows only partials, or nothing with partials turned off), walked in
+  // the same chronological order (and same same-day tiebreak) as
+  // buildStreaks on the Positions Overview page's Monthly panel -- except
+  // every run becomes its own bar here instead of only the month's biggest
+  // surviving. A flat ($0) position breaks a streak without starting a new
+  // one. A partially-closed position (still open, but with exits already
+  // realized) counts by the P&L it has realized so far when includePartial
+  // is on; a fully open one has none yet and never counts.
+  function isPartial(p: Position): boolean {
+    return p.is_open && p.exit_count > 0 && p.realized_pnl !== null;
+  }
+
+  function buildStreakRuns(all: Position[], groupBy: PosGroupBy, includePartial: boolean): StreakRun[] {
     const dateOf = groupBy === "exit" ? (p: Position) => p.exit_date : (p: Position) => p.open_date;
     const timeOf =
       groupBy === "exit"
@@ -245,30 +258,37 @@
         : (p: Position) => p.open_time;
 
     const dated = all
-      .filter((p) => !p.is_open && p.realized_pnl !== null)
-      .map((p) => ({ date: dateOf(p), time: timeOf(p), pnl: num(p.realized_pnl) }))
-      .filter((x): x is { date: string; time: string; pnl: number } => x.date !== null && x.pnl !== 0)
+      .filter((p) => p.realized_pnl !== null && (!p.is_open || (includePartial && isPartial(p))))
+      .map((p) => ({ date: dateOf(p), time: timeOf(p), pnl: num(p.realized_pnl), partial: p.is_open ? p.symbol : null }))
+      .filter((x) => x.date !== null && x.pnl !== 0)
       .sort((a, b) => {
-        if (a.date !== b.date) return a.date < b.date ? -1 : 1;
+        if (a.date !== b.date) return a.date! < b.date! ? -1 : 1;
         return a.time < b.time ? -1 : a.time > b.time ? 1 : 0;
       });
 
     const runs: StreakRun[] = [];
-    for (const { date, pnl } of dated) {
+    for (const { date, pnl, partial } of dated) {
       const outcome = pnl > 0 ? "win" : "loss";
       const last = runs[runs.length - 1];
       if (last && last.outcome === outcome) {
         last.length += 1;
-        last.end = date;
+        last.end = date!;
         last.total += pnl;
+        if (partial) last.partials.push(partial);
       } else {
-        runs.push({ outcome, length: 1, start: date, end: date, total: pnl });
+        runs.push({ outcome, length: 1, start: date!, end: date!, total: pnl, partials: partial ? [partial] : [] });
       }
     }
     return runs;
   }
 
-  const streakRuns = $derived(buildStreakRuns(filtered, $posGroupBy));
+  /** Partials in the current view the toggle would count -- what the
+   *  toggle's own label reports, so it's visible even while it's off. */
+  const partialCount = $derived(
+    filtered.filter((p) => isPartial(p) && (($posGroupBy === "exit" ? p.exit_date : p.open_date) !== null) && num(p.realized_pnl) !== 0).length,
+  );
+
+  const streakRuns = $derived(buildStreakRuns(filtered, $posGroupBy, $posStreakIncludePartial));
 
   async function handleRefresh() {
     refreshing = true;
@@ -363,6 +383,12 @@
     <StreakFlow
       runs={streakRuns}
       {currency}
+      groupBy={$posGroupBy}
+      includePartial={$posStreakIncludePartial}
+      {partialCount}
+      onTogglePartial={(v) => posStreakIncludePartial.set(v)}
+      lossLines={$posStreakLossLines}
+      onLossLinesChange={(v) => posStreakLossLines.set(v)}
       selectedFrom={$posDateFrom}
       selectedTo={$posDateTo}
       onSelectRun={(from, to) => {

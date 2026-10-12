@@ -9,7 +9,7 @@
    * switching the Separate/Combined toggle doesn't jar.
    */
   import { positionDetailParams } from "$lib/api";
-  import { fmtDayYear, fmtMoney, fmtPriceLike, toneOf, EM_DASH } from "$lib/format";
+  import { fmtDateWeekday, fmtMoney, fmtPriceLike, toneOf, EM_DASH } from "$lib/format";
   import type { OpenPositionsRow } from "./OpenPositionsList.svelte";
   import type { ClosedPositionsRow } from "./ClosedPositionsList.svelte";
 
@@ -107,12 +107,12 @@
             </td>
             <td><span class="status {r.statusClass}">{r.statusLabel}</span></td>
             <td><span class="dir {r.p.direction}">{r.p.direction.toUpperCase()}</span></td>
-            <td class="full-date">{r.p.open_date ? fmtDayYear(r.p.open_date) : EM_DASH}</td>
+            <td class="full-date">{r.p.open_date ? fmtDateWeekday(r.p.open_date) : EM_DASH}</td>
             <td class="num dim">{r.daysHeld === null ? EM_DASH : `${r.daysHeld}d`}</td>
             <td class="num">{fmtPriceLike(r.entryPrice, currency, 2)}</td>
             <td class="num">{r.qty}</td>
             <td class="num">{fmtMoney(r.costBasis, currency)}</td>
-            <td class="full-date">{r.exitDate ? fmtDayYear(r.exitDate) : EM_DASH}</td>
+            <td class="full-date">{r.exitDate ? fmtDateWeekday(r.exitDate) : EM_DASH}</td>
             <td class="num">{r.current === null ? EM_DASH : fmtPriceLike(r.current, currency, 2)}</td>
             <td class="num">
               {#if r.pnl === null}
@@ -249,8 +249,7 @@
   td.full-date {
     font-size: var(--text-2xs);
     font-weight: var(--weight-semibold);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    white-space: nowrap;
     color: var(--dim-70);
   }
   tbody tr:last-child td {

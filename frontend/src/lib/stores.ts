@@ -130,6 +130,29 @@ export const posCarryInOnly = persisted<boolean>("ibkr.pos.carryInOnly", false);
  *  used to reading, so it should be opt-in rather than a surprise on load. */
 export const posIncludeRealized = persisted<boolean>("ibkr.pos.includeRealized", false);
 
+/** Count partially-closed positions (still open, but with some exits
+ *  already realized) in the Positions page's Streak flow, by the P&L
+ *  they've realized so far. On by default -- "All" is expected to show
+ *  every position that has an outcome yet. */
+export const posStreakIncludePartial = persisted<boolean>("ibkr.pos.streakIncludePartial", true);
+
+export interface StreakLossLines {
+  on: boolean;
+  /** Loss-run length that draws the yellow line. */
+  caution: number;
+  /** Loss-run length that draws the orange line. Always > caution. */
+  alert: number;
+}
+
+/** Threshold lines on the Positions page's Streak flow: a yellow one at
+ *  `caution` consecutive losses and an orange one at `alert`. On by
+ *  default at 3 and 5. */
+export const posStreakLossLines = persisted<StreakLossLines>("ibkr.pos.streakLossLines", {
+  on: true,
+  caution: 3,
+  alert: 5,
+});
+
 export type PosSide = "all" | "long" | "short";
 
 /** Direction filter for the Positions page, same multi-value convention as

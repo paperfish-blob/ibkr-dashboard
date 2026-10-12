@@ -8,7 +8,7 @@
    * two tables read as one system stacked on the same page.
    */
   import { positionDetailParams, type Position } from "$lib/api";
-  import { fmtDayYear, fmtMoney, fmtPriceLike, toneOf, EM_DASH } from "$lib/format";
+  import { fmtDateWeekday, fmtMoney, fmtPriceLike, toneOf, EM_DASH } from "$lib/format";
 
   export interface ClosedPositionsRow {
     p: Position;
@@ -64,12 +64,12 @@
             </td>
             <td><span class="status closed">Closed</span></td>
             <td><span class="dir {r.p.direction}">{r.p.direction.toUpperCase()}</span></td>
-            <td class="full-date">{r.p.open_date ? fmtDayYear(r.p.open_date) : EM_DASH}</td>
+            <td class="full-date">{r.p.open_date ? fmtDateWeekday(r.p.open_date) : EM_DASH}</td>
             <td class="num dim">{r.daysHeld === null ? EM_DASH : `${r.daysHeld}d`}</td>
             <td class="num">{fmtPriceLike(r.entryPrice, currency, 2)}</td>
             <td class="num">{r.qty}</td>
             <td class="num">{fmtMoney(r.costBasis, currency)}</td>
-            <td class="full-date">{r.p.exit_date ? fmtDayYear(r.p.exit_date) : EM_DASH}</td>
+            <td class="full-date">{r.p.exit_date ? fmtDateWeekday(r.p.exit_date) : EM_DASH}</td>
             <td class="num"><span class="pnl {toneOf(r.realized)}">{fmtMoney(r.realized, currency)}</span></td>
           </tr>
         {/each}
@@ -204,8 +204,7 @@
   td.full-date {
     font-size: var(--text-2xs);
     font-weight: var(--weight-semibold);
-    letter-spacing: 0.08em;
-    text-transform: uppercase;
+    white-space: nowrap;
     color: var(--dim-70);
   }
   tbody tr:last-child td {

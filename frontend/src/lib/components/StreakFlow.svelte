@@ -13,6 +13,7 @@
    * recent runs -- including the current streak -- off the right edge).
    */
   import { fmtMoney, toneOf } from "$lib/format";
+  import type { StreakLossLines } from "$lib/stores";
 
   export interface StreakRun {
     outcome: "win" | "loss";
@@ -20,11 +21,24 @@
     start: string; // "YYYY-MM-DD", first position in the run
     end: string; // "YYYY-MM-DD", last position in the run
     total: number; // summed realized P&L across the run
+    partials: string[]; // symbols of partially-closed positions in the run
   }
 
   interface Props {
     runs: StreakRun[];
     currency?: string;
+    /** Which date the runs were ordered by -- only drives the caption's
+     *  wording; the caller already did the ordering. */
+    groupBy?: "exit" | "entry";
+    /** Whether partially-closed positions are counted in `runs` -- the
+     *  caller owns the filtering; this only drives the toggle's state. */
+    includePartial?: boolean;
+    /** How many partials in the current view the toggle governs. */
+    partialCount?: number;
+    onTogglePartial?: (include: boolean) => void;
+    /** Yellow/orange dashed lines at these loss-run lengths. */
+    lossLines?: StreakLossLines;
+    onLossLinesChange?: (next: StreakLossLines) => void;
     /** The Positions page's own date-range filter, so a run whose
      *  start/end exactly matches it can render as selected -- this stays
      *  in sync even when that range was set some other way (the Filters
@@ -36,10 +50,14 @@
      *  proposes what it should be set to. */
     onSelectRun?: (from: string | null, to: string | null) => void;
   }
-  let { runs, currency = "USD", selectedFrom = null, selectedTo = null, onSelectRun }: Props = $props();
+  let { runs, currency = "USD", groupBy = "exit", includePartial = true, partialCount = 0, onTogglePartial, lossLines = { on: false, caution: 3, alert: 5 }, onLossLinesChange, selectedFrom = null, selectedTo = null, onSelectRun }: Props = $props();
 
   const maxWinStreak = $derived(Math.max(0, ...runs.filter((r) => r.outcome === "win").map((r) => r.length)));
   const maxLossStreak = $derived(Math.max(0, ...runs.filter((r) => r.outcome === "loss").map((r) => r.length)));
+  const cautionHits = $derived(
+    runs.filter((r) => r.outcome === "loss" && r.length >= lossLines.caution).length,
+  );
+  const alertHits = $derived(runs.filter((r) => r.outcome === "loss" && r.length >= lossLines.alert).length);
   const currentRun = $derived(runs.length ? runs[runs.length - 1] : null);
   const selectedIndex = $derived(
     selectedFrom && selectedTo ? runs.findIndex((r) => r.start === selectedFrom && r.end === selectedTo) : -1,
@@ -184,6 +202,10 @@
   function barOpacity(i: number): number {
     if (hoveredIndex !== null) return hoveredIndex === i ? 1 : 0.32;
     if (selectedIndex >= 0) return selectedIndex === i ? 1 : 0.32;
+    // Loss runs shorter than the caution line recede so the ones worth
+    // reading stand out.
+    const r = runs[i];
+    if (lossLines.on && r.outcome === "loss" && r.length < lossLines.caution) return 0.62;
     return 1;
   }
 
@@ -277,17 +299,92 @@
   });
 </script>
 
+{#snippet partialToggle()}
+  {#if onTogglePartial}
+    <button
+      type="button"
+      class="partial-toggle"
+      role="switch"
+      aria-checked={includePartial}
+      onclick={() => onTogglePartial(!includePartial)}
+      title="Count positions that are still open but have already realized some P&L"
+    >
+      <span class="sw"></span>
+      Include partially-closed positions
+      <span class="n">· {partialCount} in view</span>
+    </button>
+  {/if}
+{/snippet}
+
+{#snippet lossLinesControls()}
+  {#if onLossLinesChange}
+    {#if lossLines.on}
+      <div class="step">
+        <button
+          type="button"
+          aria-label="Lower caution threshold"
+          disabled={lossLines.caution <= 2}
+          onclick={() => onLossLinesChange({ ...lossLines, caution: lossLines.caution - 1 })}>−</button
+        >
+        <span><i class="caution"></i>≥ {lossLines.caution}</span>
+        <button
+          type="button"
+          aria-label="Raise caution threshold"
+          disabled={lossLines.caution >= lossLines.alert - 1}
+          onclick={() => onLossLinesChange({ ...lossLines, caution: lossLines.caution + 1 })}>+</button
+        >
+      </div>
+      <div class="step">
+        <button
+          type="button"
+          aria-label="Lower alert threshold"
+          disabled={lossLines.alert <= lossLines.caution + 1}
+          onclick={() => onLossLinesChange({ ...lossLines, alert: lossLines.alert - 1 })}>−</button
+        >
+        <span><i class="alert"></i>≥ {lossLines.alert}</span>
+        <button
+          type="button"
+          aria-label="Raise alert threshold"
+          disabled={lossLines.alert >= maxLossStreak}
+          onclick={() => onLossLinesChange({ ...lossLines, alert: lossLines.alert + 1 })}>+</button
+        >
+      </div>
+    {/if}
+    <button
+      type="button"
+      class="partial-toggle"
+      role="switch"
+      aria-checked={lossLines.on}
+      onclick={() => onLossLinesChange({ ...lossLines, on: !lossLines.on })}
+      title="Dashed lines at the loss-run lengths that deserve a second look"
+    >
+      <span class="sw"></span>
+      Loss threshold lines
+    </button>
+  {/if}
+{/snippet}
+
 <div class="panel">
   <div class="hd">
     <div class="hd-left">
       <div class="eyebrow">Streak flow</div>
       <div class="title">Consecutive wins &amp; losses</div>
       <div class="caption">
-        Each bar is one run of same-outcome positions, in the order they closed · height = run length
+        Each bar is one run of same-outcome positions, in the order they {groupBy === "exit" ? "closed" : "opened"} · height = run length
       </div>
     </div>
     {#if currentRun}
       <div class="hd-right">
+        {#if lossLines.on}
+          <div class="stat">
+            <div class="val caution">{cautionHits}</div>
+            <div class="lbl">runs ≥ {lossLines.caution}L</div>
+          </div>
+          <div class="stat">
+            <div class="val alert">{alertHits}</div>
+            <div class="lbl">runs ≥ {lossLines.alert}L</div>
+          </div>
+        {/if}
         <div class="stat">
           <div class="val win">{maxWinStreak}W</div>
           <div class="lbl">longest win streak</div>
@@ -308,6 +405,7 @@
 
   {#if !bars || !layout}
     <div class="empty">No closed positions in this view.</div>
+    <div class="legend-row empty-legend"><div class="legend-ctrls">{@render partialToggle()}</div></div>
   {:else}
     <div class="body">
       <div class="bars-box" bind:this={box} bind:clientWidth={availW} onmouseleave={() => (hoveredIndex = null)}>
@@ -318,6 +416,20 @@
             height={CHART_H}
             viewBox="0 0 {layout.contentW} {CHART_H}"
           >
+            <defs>
+              {#each ["win", "loss"] as o}
+                <pattern
+                  id="streak-partial-{o}"
+                  width="6"
+                  height="6"
+                  patternUnits="userSpaceOnUse"
+                  patternTransform="rotate(45)"
+                >
+                  <rect width="6" height="6" fill={o === "win" ? "var(--up)" : "var(--dn)"} />
+                  <rect width="2.2" height="6" fill="var(--surface)" opacity="0.5" />
+                </pattern>
+              {/each}
+            </defs>
             {#each runs as r, i (i)}
               <rect
                 class="hover-band"
@@ -335,7 +447,11 @@
               <path
                 class="bar-rect"
                 d={bar.d}
-                fill={bar.outcome === "win" ? "var(--up)" : "var(--dn)"}
+                fill={bar.partials.length
+                  ? `url(#streak-partial-${bar.outcome})`
+                  : bar.outcome === "win"
+                    ? "var(--up)"
+                    : "var(--dn)"}
                 style="opacity:{barOpacity(i)}"
                 bind:this={barEls[i]}
               />
@@ -346,6 +462,7 @@
                 <text
                   class="bar-label"
                   class:record={bar.isRecord}
+                  class:alert={lossLines.on && bar.outcome === "loss" && bar.length >= lossLines.alert}
                   x={bar.x + bar.w / 2}
                   y={bar.outcome === "win" ? bar.y - 4 : bar.y + bar.h + 9}
                   text-anchor="middle"
@@ -354,6 +471,20 @@
                 </text>
               {/if}
             {/each}
+            {#if lossLines.on}
+              {#each [{ tier: "caution", n: lossLines.caution }, { tier: "alert", n: lossLines.alert }] as t (t.tier)}
+                {#if t.n <= maxLossStreak}
+                  {@const y = layout.zeroY + t.n * layout.downScale}
+                  <line class="thr {t.tier}" x1={PAD_L} y1={y} x2={layout.contentW - PAD_R} y2={y} />
+                  {#if !layout.scrolling}
+                    <g transform="translate({layout.contentW - PAD_R - 58},{y - 8})">
+                      <rect class="thr-tag {t.tier}" width="58" height="16" rx="8" />
+                      <text class="thr-tag-text {t.tier}" x="29" y="11.5" text-anchor="middle">{t.n} losses</text>
+                    </g>
+                  {/if}
+                {/if}
+              {/each}
+            {/if}
             <text class="axis-caption" x={PAD_L} y={CHART_H - 4}>{fmtDate(runs[0].start)}</text>
             <text class="axis-caption" x={layout.contentW - PAD_R} y={CHART_H - 4} text-anchor="end">
               {fmtDate(runs[runs.length - 1].end)}
@@ -375,6 +506,20 @@
               {fmtDateFull(r.start)}{r.start !== r.end ? ` – ${fmtDateFull(r.end)}` : ""}
             </div>
             <div class="t-sub total {toneOf(r.total)}">{fmtMoney(r.total, currency)} total</div>
+            {#if lossLines.on && r.outcome === "loss" && r.length >= lossLines.caution}
+              <div class="t-sub {r.length >= lossLines.alert ? 'alert' : 'partial'}">
+                {#if r.length >= lossLines.alert}
+                  reaches the {lossLines.alert}-loss alert{r.length > lossLines.alert ? ` (+${r.length - lossLines.alert})` : ""}
+                {:else}
+                  reaches the {lossLines.caution}-loss caution line
+                {/if}
+              </div>
+            {/if}
+            {#if r.partials.length}
+              <div class="t-sub partial">
+                includes {r.partials.length} partial{r.partials.length === 1 ? "" : "s"}: {r.partials.join(", ")}
+              </div>
+            {/if}
             {#if onSelectRun}
               <div class="t-hint">
                 {hoveredIndex === selectedIndex ? "Click to clear this filter" : "Click to filter Positions to this range"}
@@ -422,9 +567,19 @@
       <div class="legend-row">
         <div class="legend-item"><span class="legend-dot" style="background:var(--up)"></span>Win streak</div>
         <div class="legend-item"><span class="legend-dot" style="background:var(--dn)"></span>Loss streak</div>
+        {#if lossLines.on}
+          <div class="legend-item"><span class="legend-dash caution"></span>Caution<span class="legend-dash alert"></span>Alert</div>
+        {/if}
+        {#if includePartial && bars.some((b) => b.partials.length)}
+          <div class="legend-item"><span class="legend-dot partial"></span>Includes a partial position</div>
+        {/if}
         <div class="legend-item muted">
           {layout.scrolling ? "Scroll or click the strip above to explore history · hover" : "Hover"} a bar for its dates,
           length &amp; total P&amp;L
+        </div>
+        <div class="legend-ctrls">
+          {@render lossLinesControls()}
+          {@render partialToggle()}
         </div>
       </div>
     </div>
@@ -627,6 +782,9 @@
   .tooltip .t-sub.total {
     font-weight: var(--weight-semibold);
   }
+  .tooltip .t-sub.partial {
+    color: var(--amber);
+  }
   .tooltip .t-sub.total.pos {
     color: var(--up);
   }
@@ -657,6 +815,165 @@
   }
   .legend-item.muted {
     color: var(--dim-45);
+  }
+  .legend-dot.partial {
+    background: repeating-linear-gradient(135deg, var(--up) 0 2px, var(--surface) 2px 4px);
+    outline: 1px solid var(--border-08);
+  }
+  .empty-legend {
+    padding: 0 22px 14px;
+  }
+  .legend-ctrls {
+    margin-left: auto;
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .legend-dash {
+    width: 16px;
+    border-top: 1.5px dashed;
+    margin-left: 4px;
+  }
+  .legend-dash.caution,
+  .thr.caution {
+    stroke: var(--yellow);
+    border-color: var(--yellow);
+  }
+  .legend-dash.alert,
+  .thr.alert {
+    stroke: var(--over);
+    border-color: var(--over);
+  }
+  .thr {
+    stroke-width: 1.25;
+    stroke-dasharray: 5 4;
+    pointer-events: none;
+  }
+  .thr-tag.caution {
+    fill: var(--yellow);
+  }
+  .thr-tag.alert {
+    fill: var(--over);
+  }
+  .thr-tag-text {
+    font-size: 10px;
+    font-weight: 600;
+    pointer-events: none;
+  }
+  .thr-tag-text.caution {
+    fill: #3b2f00;
+  }
+  .thr-tag-text.alert {
+    fill: #fff;
+  }
+  .stat .val.caution {
+    color: var(--yellow);
+  }
+  .stat .val.alert {
+    color: var(--over);
+  }
+  .bar-label.alert {
+    fill: var(--dn);
+    font-size: 11px;
+  }
+  .tooltip .t-sub.alert {
+    color: var(--over);
+  }
+  .step {
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border-12);
+    border-radius: 99px;
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-medium);
+  }
+  .step span {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 6px;
+    font-variant-numeric: tabular-nums;
+  }
+  .step i {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+  }
+  .step i.caution {
+    background: var(--yellow);
+  }
+  .step i.alert {
+    background: var(--over);
+  }
+  .step button {
+    width: 20px;
+    height: 20px;
+    border: 0;
+    border-radius: 50%;
+    background: var(--surface-04);
+    color: var(--text);
+    font: inherit;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .step button:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+  .step button:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .partial-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 3px 11px 3px 6px;
+    border: 1px solid var(--border-12);
+    border-radius: 99px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-medium);
+    cursor: pointer;
+  }
+  .partial-toggle:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  .partial-toggle .n {
+    color: var(--dim-45);
+    font-weight: 400;
+  }
+  .partial-toggle .sw {
+    width: 26px;
+    height: 15px;
+    border-radius: 99px;
+    background: var(--border-12);
+    position: relative;
+    flex: none;
+    transition: background 0.15s;
+  }
+  .partial-toggle .sw::after {
+    content: "";
+    position: absolute;
+    top: 2px;
+    left: 2px;
+    width: 11px;
+    height: 11px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.15s;
+  }
+  .partial-toggle[aria-checked="true"] .sw {
+    background: var(--accent);
+  }
+  .partial-toggle[aria-checked="true"] .sw::after {
+    transform: translateX(11px);
   }
   .legend-dot {
     width: 8px;

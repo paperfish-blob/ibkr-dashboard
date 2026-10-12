@@ -116,6 +116,14 @@ export function fmtDayYear(iso: string): string {
   return `${fmtDay(iso)} '${String(parseISODay(iso).getFullYear()).slice(-2)}`;
 }
 
+/** Table-cell date, day first with the weekday: "Tue 22 Sep 2026". */
+export function fmtDateWeekday(iso: string): string {
+  const d = parseISODay(iso);
+  const wd = d.toLocaleDateString("en-GB", { weekday: "short" });
+  const rest = d.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+  return `${wd} ${rest}`;
+}
+
 /** Full date for day-group headers: "September 11, 2026". */
 export function fmtFullDate(iso: string): string {
   return parseISODay(iso).toLocaleDateString("en-US", {

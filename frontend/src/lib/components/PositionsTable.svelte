@@ -80,6 +80,18 @@
     return groupBy === "entry" ? (p.open_date ?? p.exit_date ?? "") : (p.exit_date ?? p.open_date ?? "");
   }
 
+  /** The time-of-day a position is ordered by inside its day band: the same
+   *  event groupDate() keys the band off (entry -> open time, exit -> last
+   *  exit leg's time), including its fallbacks, so the order always agrees
+   *  with the band's own date. */
+  function exitTime(p: Position): string {
+    return p.exit_legs[p.exit_legs.length - 1]?.trade_time ?? "";
+  }
+  function groupTime(p: Position): string {
+    const byExit = groupBy === "exit" ? p.exit_date !== null : p.open_date === null;
+    return (byExit ? exitTime(p) : p.open_time) ?? "";
+  }
+
   /** Day bands, same as the ledger's. `positions` arrives most-recent-
    *  activity-first, which only clusters same-day rows together in exit
    *  mode -- entry mode re-sorts by open date first so same-day opens land
@@ -97,6 +109,9 @@
       if (last && last.date === date) last.rows.push({ p, i });
       else groups.push({ date, rows: [{ p, i }] });
     });
+    // Latest first inside each band. Array#sort is stable, so ties (and
+    // positions with no time at all) keep their incoming order.
+    for (const g of groups) g.rows.sort((a, b) => groupTime(b.p).localeCompare(groupTime(a.p)));
     return groups;
   });
 
@@ -267,6 +282,7 @@
               <td class="full-date {p.exit_date ? '' : 'dash'}">
                 {p.exit_date ? fmtFullDate(p.exit_date) : EM_DASH}
                 {#if p.exit_date}<span class="wd-abbr">{weekdayAbbr(p.exit_date)}</span>{/if}
+                {#if exitTime(p)}<span class="wd-abbr">{exitTime(p)}</span>{/if}
               </td>
               <td class="num dash">{EM_DASH}</td>
               <td class="num pnl {p.realized_pnl === null ? '' : toneOf(num(p.realized_pnl))}">

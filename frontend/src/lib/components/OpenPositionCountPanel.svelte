@@ -77,6 +77,44 @@
     return order.map((s) => (counts.get(s)! > 1 ? `${s} ×${counts.get(s)}` : s)).join(", ");
   }
 
+  const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+  // X-axis label for day `i` of `view`, or "" to skip it. How much to show
+  // depends on the pixels available per day: every day as weekday over
+  // "21 Sep" when there's room, thinning to just Mondays and then every
+  // other Monday as the window widens. The year is a third line under the
+  // first label and wherever it changes, so a window spanning New Year's
+  // can't be misread.
+  function axisLabel(view: DayCount[], i: number, pxPerDay: number): string | string[] {
+    const d = parseISODay(view[i].date);
+    const wd = d.getDay();
+    const dayMonth = `${d.getDate()} ${MONTHS[d.getMonth()]}`;
+    let top: string | null = null;
+    let bottom: string | null = null;
+    if (pxPerDay >= 34) {
+      top = WEEKDAYS[wd];
+      bottom = dayMonth;
+    } else if (pxPerDay >= 15) {
+      top = WEEKDAYS[wd].slice(0, 2);
+      bottom = String(d.getDate());
+    } else if (pxPerDay >= 5) {
+      if (wd === 1) {
+        top = "Mon";
+        bottom = dayMonth;
+      }
+    } else if (wd === 1) {
+      // Counted back from the newest day so the same Mondays stay labelled
+      // as the window pans.
+      const weeksBack = Math.floor((view.length - 1 - i) / 7);
+      if (weeksBack % 2 === 0) bottom = dayMonth;
+    }
+    if (!top && !bottom) return "";
+    const yearChanged = i === 0 || parseISODay(view[i - 1].date).getFullYear() !== d.getFullYear();
+    const lines = [top, bottom, yearChanged ? String(d.getFullYear()) : null].filter((l): l is string => !!l);
+    return lines.length === 1 ? lines[0] : lines;
+  }
+
   interface DayCount {
     date: string;
     count: number;
@@ -172,6 +210,19 @@
       selEnd = 1;
     }
   });
+
+  const PRESETS: { label: string; days: number | null }[] = [
+    { label: "30d", days: 30 },
+    { label: "90d", days: 90 },
+    { label: "180d", days: 180 },
+    { label: "All", days: null },
+  ];
+  // A preset is a trailing window ending today, same shape as the default.
+  function applyPreset(days: number | null) {
+    const n = series.length;
+    selEnd = 1;
+    selStart = days === null || days >= n ? 0 : 1 - days / n;
+  }
 
   const windowedSeries = $derived.by((): DayCount[] => {
     if (!showRangeSelector || series.length === 0) return series;
@@ -283,7 +334,7 @@
     if (!ctx) return;
 
     chartView = windowedSeries;
-    const labels = chartView.map((pt) => fmtDay(pt.date));
+    const labels = chartView.map((pt) => pt.date);
     const within = chartView.map((pt) => Math.min(pt.count, COMFORT_THRESHOLD));
     const total = chartView.map((pt) => pt.count);
 
@@ -350,6 +401,10 @@
             displayColors: false,
             filter: (c: { datasetIndex: number }) => c.datasetIndex === 1,
             callbacks: {
+              title: (items: { dataIndex: number }[]) => {
+                const iso = chartView[items[0].dataIndex].date;
+                return `${WEEKDAYS[parseISODay(iso).getDay()]}, ${fmtFullDate(iso)}`;
+              },
               label: (c: { dataIndex: number }) => `Open that day: ${chartView[c.dataIndex].count}`,
             },
           },
@@ -358,7 +413,16 @@
           x: {
             grid: { display: false },
             border: { color: "transparent" },
-            ticks: { font: { size: 9 }, color: toRgba("--ink-rgb", 0.4), maxTicksLimit: 10, autoSkip: true },
+            ticks: {
+              font: { size: 9 },
+              color: toRgba("--ink-rgb", 0.4),
+              autoSkip: false,
+              maxRotation: 0,
+              callback(this: { chart: { chartArea?: { width: number }; width: number } }, _v: unknown, i: number) {
+                const w = this.chart.chartArea?.width ?? this.chart.width;
+                return axisLabel(chartView, i, w / Math.max(1, chartView.length));
+              },
+            },
           },
           y: {
             position: "right" as const,
@@ -507,8 +571,17 @@
         amber = the excess above it
       </div>
     </div>
-    {#if showRangeSelector && windowedSeries.length > 0 && windowedSeries.length < series.length}
-      <div class="range-pill">{windowedSeries.length} of {series.length} days</div>
+    {#if showRangeSelector && series.length > 0}
+      <div class="hd-right">
+        <div class="presets">
+          {#each PRESETS as p}
+            <button type="button" onclick={() => applyPreset(p.days)}>{p.label}</button>
+          {/each}
+        </div>
+        {#if windowedSeries.length < series.length}
+          <div class="range-pill">{windowedSeries.length} of {series.length} days</div>
+        {/if}
+      </div>
     {/if}
   </div>
   <div class="body">
@@ -597,6 +670,35 @@
     border-radius: var(--radius-pill);
     white-space: nowrap;
     flex-shrink: 0;
+  }
+  .hd-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+  }
+  .presets {
+    display: flex;
+    border: 1px solid var(--border-05);
+    border-radius: var(--radius-md);
+    overflow: hidden;
+  }
+  .presets button {
+    font: inherit;
+    font-size: var(--text-2xs);
+    padding: 4px 9px;
+    border: 0;
+    border-right: 1px solid var(--border-05);
+    background: var(--surface);
+    color: var(--dim-70);
+    cursor: pointer;
+  }
+  .presets button:last-child {
+    border-right: 0;
+  }
+  .presets button:hover {
+    background: var(--accent-bg);
+    color: var(--accent);
   }
   .hd-left {
     display: flex;

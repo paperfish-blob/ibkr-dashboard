@@ -253,6 +253,13 @@
     // -- it's the remaining size, not the original entry size, so it's used
     // as-is rather than subtracting exit_legs again.
     const qtyOpen = num(p.quantity);
+    // Original size = what's left + everything already sold off. Rounded
+    // so fractional quantities don't pick up float noise from the sum. A
+    // carry-in's true original size is unknown (its opening trade is
+    // outside the fetched range), so it gets neither figure.
+    const qtySold = p.exit_legs.reduce((sum, l) => sum + Math.abs(num(l.quantity)), 0);
+    const qtyInitial = p.is_carry_in ? null : Number((qtyOpen + qtySold).toFixed(6));
+    const pctSold = qtyInitial === null ? null : qtyInitial > 0 ? (qtySold / qtyInitial) * 100 : 0;
     const entryPrice = num(p.entry_price);
     const costBasis = qtyOpen * entryPrice;
     const current = historyBars.get(p.symbol)?.at(-1)?.close ?? null;
@@ -262,6 +269,8 @@
       p,
       status: p.exit_count > 0 ? "partial" : "full",
       qtyOpen,
+      qtyInitial,
+      pctSold,
       entryPrice,
       costBasis,
       current,
@@ -603,7 +612,7 @@
         <PotentialPnlPanel positions={positionSeries} {combinedSeries} includesClosed={$posIncludeRealized} {currency} />
         <div class="gap"></div>
       {/if}
-      <OpenPositionCountPanel positions={yearFilteredPositions} />
+      <OpenPositionCountPanel positions={yearFilteredPositions} showRangeSelector />
       <div class="gap"></div>
       <PositionExposurePanel {rows} {currency} />
       <div class="gap"></div>
