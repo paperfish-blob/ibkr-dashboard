@@ -47,8 +47,8 @@
           <th>Entry Date</th>
           <th class="num">Days Held</th>
           <th class="num">Entry Price</th>
-          <th class="num">Qty</th>
           <th class="num">Cost Basis</th>
+          <th class="num">Qty</th>
           <th>Exit Date</th>
           <th class="num">Realized P&amp;L</th>
         </tr>
@@ -67,8 +67,8 @@
             <td class="full-date">{r.p.open_date ? fmtDateWeekday(r.p.open_date) : EM_DASH}</td>
             <td class="num dim">{r.daysHeld === null ? EM_DASH : `${r.daysHeld}d`}</td>
             <td class="num">{fmtPriceLike(r.entryPrice, currency, 2)}</td>
-            <td class="num">{r.qty}</td>
             <td class="num">{fmtMoney(r.costBasis, currency)}</td>
+            <td class="num">{r.qty}</td>
             <td class="full-date">{r.p.exit_date ? fmtDateWeekday(r.p.exit_date) : EM_DASH}</td>
             <td class="num"><span class="pnl {toneOf(r.realized)}">{fmtMoney(r.realized, currency)}</span></td>
           </tr>
@@ -148,7 +148,7 @@
      auto table layout doesn't hand their leftover space to a short column,
      drifting it away from its neighbors -- Realized P&L (the widest
      remaining content) absorbs whatever's left instead. Columns 1-8
-     (Symbol through Cost Basis) share their widths with OpenPositionsList's
+     (Symbol through Qty) share their widths with OpenPositionsList's
      same columns so the two stacked tables line up -- Symbol has to be
      pinned too, not just left flexible, since each table has a different
      number of flexible trailing columns competing for the leftover space. */
@@ -178,11 +178,11 @@
   }
   th:nth-child(7),
   td:nth-child(7) {
-    width: 70px;
+    width: 110px;
   }
   th:nth-child(8),
   td:nth-child(8) {
-    width: 110px;
+    width: 70px;
   }
   th:nth-child(9),
   td:nth-child(9) {

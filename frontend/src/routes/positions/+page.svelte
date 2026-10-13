@@ -7,13 +7,14 @@
   import SegToggle from "$lib/components/SegToggle.svelte";
   import SymbolFilter from "$lib/components/SymbolFilter.svelte";
   import AdvancedFilters from "$lib/components/AdvancedFilters.svelte";
+  import IndexBenchmark from "$lib/components/IndexBenchmark.svelte";
   import StreakFlow, { type StreakRun } from "$lib/components/StreakFlow.svelte";
   import PositionsTable from "$lib/components/PositionsTable.svelte";
   import SkeletonCard from "$lib/components/SkeletonCard.svelte";
   import AlertBar from "$lib/components/AlertBar.svelte";
   import PeriodPicker from "$lib/components/PeriodPicker.svelte";
   import { fmtMoney, num, toneOf } from "$lib/format";
-  import type { Position } from "$lib/api";
+  import { api, type OHLCVBar, type Position } from "$lib/api";
   import {
     positions,
     positionsLoading,
@@ -36,6 +37,55 @@
   } from "$lib/stores";
 
   const POLL_MS = 30_000;
+
+  // QQQ above the streak chart, following this page's own date filter. The
+  // fetch window has to reach back past the earliest position this page
+  // can show -- plus a year-ish of warmup for the 200-day average -- the
+  // same reasoning as Positions Overview's own QQQ panel, so an old filter
+  // doesn't land on an empty chart.
+  const IDX_LOOKBACK_MIN_DAYS = 765;
+  let qqqBars = $state<OHLCVBar[]>([]);
+  let qqqLookbackDays = $state(IDX_LOOKBACK_MIN_DAYS);
+
+  const earliestPositionDate = $derived.by((): string | null => {
+    let min: string | null = null;
+    for (const p of $positions?.positions ?? []) {
+      for (const d of [p.open_date, p.exit_date]) {
+        if (d && (min === null || d < min)) min = d;
+      }
+    }
+    return min;
+  });
+
+  // A custom From/To wins; otherwise the selected year; otherwise
+  // everything from the first position on.
+  const qqqRange = $derived.by(() => {
+    if ($posDateFrom || $posDateTo) return { from: $posDateFrom, to: $posDateTo };
+    if (/^\d{4}$/.test($period)) return { from: `${$period}-01-01`, to: `${$period}-12-31` };
+    return { from: earliestPositionDate, to: null };
+  });
+
+  $effect(() => {
+    const start = $posDateFrom && (!earliestPositionDate || $posDateFrom < earliestPositionDate)
+      ? $posDateFrom
+      : earliestPositionDate;
+    if (!start) return;
+    const daysSince = Math.ceil((Date.now() - new Date(start).getTime()) / 86_400_000);
+    const needed = daysSince + 400;
+    if (needed > qqqLookbackDays) qqqLookbackDays = Math.min(needed, 3650);
+  });
+
+  let qqqFetchId = 0;
+  $effect(() => {
+    const lookback = qqqLookbackDays;
+    const id = ++qqqFetchId;
+    api
+      .marketDataOhlcv("QQQ", lookback)
+      .then((r) => {
+        if (id === qqqFetchId && r.ok) qqqBars = r.bars;
+      })
+      .catch(() => {});
+  });
   let refreshing = $state(false);
 
   // Every field a URL can seed onto this page's filters, applied on top of
@@ -380,6 +430,8 @@
   {#if $positionsLoading && !$positions}
     <SkeletonCard height={480} rows={8} />
   {:else if $positions}
+    <IndexBenchmark symbol="QQQ" name="Nasdaq 100" bars={qqqBars} range={qqqRange} />
+    <div class="gap"></div>
     <StreakFlow
       runs={streakRuns}
       {currency}

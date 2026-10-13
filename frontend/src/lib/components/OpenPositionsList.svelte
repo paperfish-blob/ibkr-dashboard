@@ -37,7 +37,7 @@
     return `${Number(n.toFixed(1))}%`;
   }
 
-  // ---- Initial Qty hover: a third of the original size, how many thirds
+  // ---- Base Qty hover: a third of the original size, how many thirds
   // are already sold. position:fixed so the panel's and scroller's
   // overflow clipping can't cut it off on the last row. ----
   const TIP_W = 220;
@@ -82,9 +82,9 @@
           <th>Entry Date</th>
           <th class="num">Days Held</th>
           <th class="num">Entry Price</th>
-          <th class="num">Qty Open</th>
           <th class="num">Cost Basis</th>
-          <th class="num">Initial Qty</th>
+          <th class="num">Open Qty</th>
+          <th class="num">Base Qty</th>
           <th class="num">% Sold</th>
           <th class="num">Current Price</th>
           <th class="num">Unrealized P&amp;L</th>
@@ -105,8 +105,8 @@
             <td class="full-date">{r.p.open_date ? fmtDateWeekday(r.p.open_date) : EM_DASH}</td>
             <td class="num dim">{r.daysHeld === null ? EM_DASH : `${r.daysHeld}d`}</td>
             <td class="num">{fmtPriceLike(r.entryPrice, currency, 2)}</td>
-            <td class="num">{r.qtyOpen}</td>
             <td class="num">{fmtMoney(r.costBasis, currency)}</td>
+            <td class="num">{r.qtyOpen}</td>
             <td
               class="num"
               class:dim={r.qtyInitial === null}
@@ -158,7 +158,7 @@
     role="tooltip"
     style="left:{tip.left}px;{tip.top !== null ? `top:${tip.top}px` : `bottom:${tip.bottom}px`};width:{TIP_W}px"
   >
-    <div class="tip-h">One third of initial</div>
+    <div class="tip-h">One third of base qty</div>
     <div class="tip-big">{fmt2(third)}<small>of {initial}</small></div>
     <div class="tip-r"><span>Two thirds</span><span>{fmt2(third * 2)}</span></div>
     <div class="tip-r"><span>Sold so far</span><span>{sold} · {thirdsSold.toFixed(2)} thirds</span></div>
@@ -225,7 +225,7 @@
   th.num {
     text-align: right;
   }
-  /* Columns 1-8 (Symbol through Cost Basis) match ClosedPositionsList's
+  /* Columns 1-8 (Symbol through Open Qty) match ClosedPositionsList's
      same columns pixel-for-pixel so the two stacked tables line up -- Symbol
      has to be pinned too, not just left flexible, since each table has a
      different number of flexible trailing columns competing for the
@@ -256,11 +256,11 @@
   }
   th:nth-child(7),
   td:nth-child(7) {
-    width: 70px;
+    width: 110px;
   }
   th:nth-child(8),
   td:nth-child(8) {
-    width: 110px;
+    width: 70px;
   }
   th:nth-child(9),
   td:nth-child(9) {

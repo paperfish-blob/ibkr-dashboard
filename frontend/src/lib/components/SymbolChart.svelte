@@ -58,6 +58,11 @@
      *  trade with a wide default view isn't a sliver at the chart's edge.
      *  Reverts to the default view once cleared. */
     focusDate?: string | null;
+    /** "YYYY-MM-DD" window to shade behind the candles and label, e.g. the
+     *  Positions page's own date filter, so it's clear which part of the
+     *  chart the page is currently looking at. Clamped to the bars that
+     *  actually exist; unset draws nothing. */
+    bandRange?: { from: string; to: string } | null;
     /** "YYYY-MM" -- dims every bar outside this calendar month, e.g. synced
      *  from a hovered month in a P&L chart elsewhere on the page. */
     highlightMonth?: string | null;
@@ -105,6 +110,7 @@
     selectedMarker,
     focusDate = null,
     highlightMonth,
+    bandRange = null,
     regimeBands = false,
     apsPane = true,
     extendedAlerts = true,
@@ -214,6 +220,34 @@
       from: Math.floor(from.getTime() / 1000) as unknown as Time,
       to: Math.floor(to.getTime() / 1000) as unknown as Time,
     });
+  }
+
+  // Shaded window for bandRange, in container pixels -- recomputed on
+  // every pan/zoom/resize, since the library only gives coordinates for
+  // what's currently on screen.
+  let band = $state<{ left: number; width: number } | null>(null);
+  function updateBand() {
+    if (!chart || !bandRange || !history?.length) {
+      band = null;
+      return;
+    }
+    const first = history.find((b) => b.time >= bandRange.from);
+    const last = [...history].reverse().find((b) => b.time <= bandRange.to);
+    if (!first || !last || first.time > last.time) {
+      band = null;
+      return;
+    }
+    const ts = chart.timeScale();
+    const x1 = ts.timeToCoordinate(first.time as unknown as Time);
+    const x2 = ts.timeToCoordinate(last.time as unknown as Time);
+    // The time scale reports width 0 until the chart's first paint, which
+    // would collapse the band to nothing -- fall back to the container
+    // minus the price axis, and retry on the next frame (below).
+    const plotW = ts.width() || (container?.clientWidth ?? 0) - chart.priceScale("right").width();
+    // Off-screen on one side means the band runs to that edge.
+    const left = Math.max(0, x1 ?? 0);
+    const right = Math.min(plotW, x2 ?? plotW);
+    band = right > left ? { left, width: Math.max(2, right - left) } : null;
   }
 
   $effect(() => {
@@ -427,6 +461,8 @@
       if (interacted && !programmatic) viewMoved = true;
     });
 
+    chart.timeScale().subscribeVisibleLogicalRangeChange(updateBand);
+
     chart.subscribeCrosshairMove((param: MouseEventParams<Time>) => {
       const t = param.time !== undefined ? timeToIso(param.time) : null;
       lastCrosshairSeq = onCrosshairMove?.(t) ?? lastCrosshairSeq;
@@ -444,12 +480,23 @@
     resizeObs = new ResizeObserver(() => {
       if (container && chart) {
         chart.applyOptions({ width: container.clientWidth });
+        updateBand();
       }
     });
     resizeObs.observe(container);
 
     chartVersionCounter += 1;
     chartVersion = chartVersionCounter;
+  });
+
+  $effect(() => {
+    chartVersion;
+    bandRange;
+    updateBand();
+    // Coordinates aren't valid until the chart has painted once, and no
+    // range-change event fires for that first layout.
+    const raf = requestAnimationFrame(() => requestAnimationFrame(updateBand));
+    return () => cancelAnimationFrame(raf);
   });
 
   let priceLine: IPriceLine | null = null;
@@ -584,6 +631,11 @@
       Reset
     </button>
   {/if}
+  {#if band}
+    <div class="band" style="left:{band.left}px;width:{band.width}px;height:{height - (showTimeAxis ? 26 : 0)}px">
+      <span class="band-label">Filtered range</span>
+    </div>
+  {/if}
   <div bind:this={container} class="chart" style="height:{height}px"></div>
 </div>
 
@@ -642,5 +694,28 @@
   }
   .chart {
     width: 100%;
+  }
+  .band {
+    position: absolute;
+    top: 0;
+    z-index: 1;
+    pointer-events: none;
+    background: rgba(91, 108, 255, 0.09);
+    border-inline: 1px dashed rgba(91, 108, 255, 0.55);
+    mix-blend-mode: multiply;
+  }
+  .band-label {
+    position: absolute;
+    top: 24px;
+    left: 6px;
+    padding: 2px 8px;
+    border-radius: 99px;
+    background: #fff;
+    border: 1px solid rgba(12, 13, 16, 0.1);
+    color: #5b6cff;
+    font-size: var(--text-2xs);
+    font-weight: var(--weight-semibold);
+    white-space: nowrap;
+    mix-blend-mode: normal;
   }
 </style>

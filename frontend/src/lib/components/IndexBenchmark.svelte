@@ -17,8 +17,16 @@
     name: string;
     bars: OHLCVBar[];
     highlightMonth?: string | null;
+    /** The page's own date filter, as "YYYY-MM-DD" (either end null for
+     *  open). Passing it -- even as {from: null, to: null} -- switches the
+     *  panel into range mode: the chart opens on that window with a shaded
+     *  band, a "Range" tile (selected by default) shows the index's move
+     *  across exactly it, and 1M-YTD are measured back from the window's
+     *  end. Left undefined (Overview), none of that applies. */
+    range?: { from: string | null; to: string | null };
   }
-  let { symbol, name, bars, highlightMonth = null }: Props = $props();
+  let { symbol, name, bars, highlightMonth = null, range }: Props = $props();
+  const rangeMode = $derived(range !== undefined);
 
   // When a specific year is selected in the period picker, every tile
   // (and the chart's own default view, via SymbolChart's own
@@ -29,9 +37,11 @@
   // (bars after that year) so everything before it -- prior years, needed
   // for a trailing lookback or MA warmup near the start of the year --
   // stays intact. "All" (or anything not a bare year) is unchanged: bars
-  // as fetched, anchored on today, exactly as before.
+  // as fetched, anchored on today, exactly as before. Range mode skips
+  // this: its own window decides what the end is, and bars past it stay
+  // visible as context around the shaded band.
   const anchoredBars = $derived.by(() => {
-    if (!/^\d{4}$/.test($period)) return bars;
+    if (rangeMode || !/^\d{4}$/.test($period)) return bars;
     const cutoff = `${$period}-12-31`;
     let idx = -1;
     for (let i = 0; i < bars.length; i++) {
@@ -41,9 +51,9 @@
   });
 
   interface Tf {
-    k: "1MO" | "3MO" | "6MO" | "1Y" | "YTD";
+    k: "RANGE" | "1MO" | "3MO" | "6MO" | "1Y" | "YTD";
     label: string;
-    daysBack: number | null; // null for YTD, computed separately
+    daysBack: number | null; // null for YTD (and RANGE), computed separately
   }
   const TFS: Tf[] = [
     { k: "1MO", label: "1M", daysBack: 21 },
@@ -52,40 +62,98 @@
     { k: "1Y", label: "1Y", daysBack: 252 },
     { k: "YTD", label: "YTD", daysBack: null },
   ];
+  const RANGE_TF: Tf = { k: "RANGE", label: "Range", daysBack: null };
   let activeTf = $state<Tf["k"]>("1Y");
+
+  // Range mode: indexes of the filtered window within anchoredBars. endIdx
+  // is the last bar on or before range.to (the last bar overall when it's
+  // open-ended); fromIdx the first on or after range.from. In every other
+  // mode endIdx is simply the last bar, so the helpers below behave
+  // exactly as before.
+  const win = $derived.by(() => {
+    const b = anchoredBars;
+    if (!b.length) return { fromIdx: 0, endIdx: -1 };
+    let endIdx = b.length - 1;
+    let fromIdx = 0;
+    if (rangeMode && range) {
+      if (range.to) {
+        endIdx = -1;
+        for (let i = 0; i < b.length; i++) if (b[i].time <= range.to) endIdx = i;
+      }
+      if (range.from) {
+        const f = b.findIndex((x) => x.time >= range.from!);
+        fromIdx = f === -1 ? b.length : f;
+      }
+    }
+    return { fromIdx, endIdx };
+  });
+  const endIdx = $derived(win.endIdx);
+
+  // Landing on a different filter puts the Range tile back in front.
+  $effect(() => {
+    if (!rangeMode) return;
+    range?.from;
+    range?.to;
+    activeTf = "RANGE";
+  });
 
   // Trading-day offsets, the same convention the position detail page's own
   // period tiles use -- not calendar days, so weekends/holidays don't skew
   // "1 month" short.
   function pctChangeAt(tradingDaysBack: number): number | null {
     const b = anchoredBars;
-    if (b.length < 2) return null;
-    const lastIdx = b.length - 1;
-    const idx = lastIdx - tradingDaysBack;
+    if (b.length < 2 || endIdx < 0) return null;
+    const idx = endIdx - tradingDaysBack;
     if (idx < 0) return null;
     const base = b[idx].close;
     if (base === 0) return null;
-    return ((b[lastIdx].close - base) / base) * 100;
+    return ((b[endIdx].close - base) / base) * 100;
+  }
+  function ytdStartIdx(): number {
+    const b = anchoredBars;
+    if (b.length < 2 || endIdx < 0) return -1;
+    const lastYear = b[endIdx].time.slice(0, 4);
+    return b.findIndex((x) => x.time.slice(0, 4) === lastYear);
   }
   function pctChangeYTD(): number | null {
     const b = anchoredBars;
-    if (b.length < 2) return null;
-    const lastYear = b[b.length - 1].time.slice(0, 4);
-    const idx = b.findIndex((x) => x.time.slice(0, 4) === lastYear);
+    const idx = ytdStartIdx();
     if (idx < 0) return null;
     const base = b[idx].close;
     if (base === 0) return null;
-    return ((b[b.length - 1].close - base) / base) * 100;
+    return ((b[endIdx].close - base) / base) * 100;
+  }
+  // The close just before the window opens, so the first day's own move
+  // counts -- or the first bar when the window starts before the data does.
+  function pctChangeRange(): number | null {
+    const b = anchoredBars;
+    if (endIdx < 0 || win.fromIdx > endIdx) return null;
+    const base = b[Math.max(0, win.fromIdx - 1)].close;
+    if (base === 0) return null;
+    return ((b[endIdx].close - base) / base) * 100;
   }
   function tfValue(tf: Tf): number | null {
+    if (tf.k === "RANGE") return pctChangeRange();
     return tf.k === "YTD" ? pctChangeYTD() : pctChangeAt(tf.daysBack!);
   }
 
-  const tfRows = $derived(TFS.map((tf) => ({ tf, value: tfValue(tf) })));
+  const MON = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  function shortDate(d: string): string {
+    const [, m, day] = d.split("-").map(Number);
+    return `${MON[m - 1]} ${day}`;
+  }
+  function tfSub(tf: Tf): string | null {
+    if (tf.k !== "RANGE" || endIdx < 0 || win.fromIdx > endIdx) return null;
+    return `${shortDate(anchoredBars[win.fromIdx].time)} → ${shortDate(anchoredBars[endIdx].time)}`;
+  }
+
+  const tfRows = $derived(
+    (rangeMode ? [RANGE_TF, ...TFS] : TFS).map((tf) => ({ tf, value: tfValue(tf), sub: tfSub(tf) })),
+  );
   const activeRow = $derived(tfRows.find((r) => r.tf.k === activeTf) ?? tfRows[0]);
 
   const visibleMonths = $derived.by((): number | undefined => {
-    if (!anchoredBars.length) return undefined;
+    if (rangeMode || !anchoredBars.length) return undefined;
     switch (activeTf) {
       case "1MO":
         return 1;
@@ -100,7 +168,30 @@
     }
   });
 
-  const lastClose = $derived(anchoredBars.length ? anchoredBars[anchoredBars.length - 1].close : null);
+  // Range mode's own visible window: the filtered range with just enough
+  // context either side (a couple of bars, ~4% of its length) for the
+  // shaded band's edges to read as edges -- any more and a short filter
+  // opens weeks before its own start date -- or a tile's lookback ending
+  // just past the window's end.
+  const focusRange = $derived.by((): { from: string; to: string } | undefined => {
+    const b = anchoredBars;
+    if (!rangeMode || endIdx < 0 || !b.length) return undefined;
+    if (activeTf === "RANGE") {
+      if (win.fromIdx > endIdx) return undefined;
+      const pad = Math.max(2, Math.round((endIdx - win.fromIdx) * 0.04));
+      return { from: b[Math.max(0, win.fromIdx - pad)].time, to: b[Math.min(b.length - 1, endIdx + pad)].time };
+    }
+    const back =
+      activeTf === "YTD" ? endIdx - ytdStartIdx() : (TFS.find((t) => t.k === activeTf)?.daysBack ?? 252);
+    return { from: b[Math.max(0, endIdx - back)].time, to: b[Math.min(b.length - 1, endIdx + 3)].time };
+  });
+
+  const bandRange = $derived.by(() => {
+    if (!rangeMode || !range || !anchoredBars.length) return null;
+    return { from: range.from ?? anchoredBars[0].time, to: range.to ?? anchoredBars[anchoredBars.length - 1].time };
+  });
+
+  const lastClose = $derived(endIdx >= 0 ? anchoredBars[endIdx].close : null);
 </script>
 
 <div class="panel">
@@ -122,15 +213,26 @@
     </div>
 
     {#if anchoredBars.length}
-      <SymbolChart history={anchoredBars} height={260} {visibleMonths} {highlightMonth} regimeBands apsPane extendedAlerts />
+      <SymbolChart
+        history={anchoredBars}
+        height={260}
+        {visibleMonths}
+        {focusRange}
+        {bandRange}
+        {highlightMonth}
+        regimeBands
+        apsPane
+        extendedAlerts
+      />
 
-      <div class="idx-tfs">
-        {#each tfRows as { tf, value } (tf.k)}
+      <div class="idx-tfs" class:six={rangeMode}>
+        {#each tfRows as { tf, value, sub } (tf.k)}
           <button class="tf" class:active={tf.k === activeTf} onclick={() => (activeTf = tf.k)}>
             <div class="tf-key">{tf.label}</div>
             <div class="tf-val {value === null ? '' : value >= 0 ? 'pos' : 'neg'}">
               {value === null ? "—" : `${value >= 0 ? "+" : ""}${value.toFixed(1)}%`}
             </div>
+            {#if sub}<div class="tf-sub">{sub}</div>{/if}
           </button>
         {/each}
       </div>
@@ -208,6 +310,9 @@
     grid-template-columns: repeat(5, 1fr);
     gap: 8px;
   }
+  .idx-tfs.six {
+    grid-template-columns: 1.25fr repeat(5, 1fr);
+  }
   .tf {
     padding: 8px 10px;
     border-radius: var(--radius-md);
@@ -238,6 +343,12 @@
     font-weight: var(--weight-bold);
     margin-top: 2px;
     color: var(--text);
+  }
+  .tf-sub {
+    font-size: 9.5px;
+    font-weight: var(--weight-medium);
+    color: var(--dim-45);
+    margin-top: 1px;
   }
   .tf-val.pos {
     color: var(--up);
