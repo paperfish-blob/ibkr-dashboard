@@ -18,6 +18,19 @@ time. That is expected: the dashboard falls back to Flex and shows a
 The UI is a SvelteKit app in [frontend/](frontend/), sharing its design
 language with the `ui-reference` dashboard.
 
+## Prerequisites
+
+- **[uv](https://docs.astral.sh/uv/)**: installs Python and the backend
+  dependencies for you. The project needs Python 3.12 or newer
+  (`requires-python` in [pyproject.toml](pyproject.toml)); `uv run` fetches a
+  matching interpreter if you don't have one, so there is no manual
+  `pip install` or venv step.
+- **Node.js 18.13+ and npm**: only for building the UI in
+  [frontend/](frontend/) (SvelteKit 2 / Vite 5). Skip it and the server falls
+  back to the single-file dashboard.
+- **An IBKR account** with a Flex Query and token (setup below). IB Gateway is
+  optional.
+
 ## Quick start
 
 ```bash
@@ -107,6 +120,26 @@ API → Settings:
 - ✅ Prepare portfolio PnL data when downloading positions — `reqPnL`
   returns nothing without it
 - Trusted IP `127.0.0.1`; port **4001** live / **4002** paper → `IB_PORT`
+
+### 4. `.env` reference
+
+[.env.example](.env.example) is the template. `.env` is gitignored because the
+Flex token is a credential. Restart the server after editing it.
+
+| Variable | Default | Needed? | Meaning |
+|---|---|---|---|
+| `FLEX_TOKEN` | — | **Yes** (for history) | Token from step 2 |
+| `FLEX_QUERY_ID` | — | **Yes** (for history) | Query ID from step 1 |
+| `FLEX_CACHE_TTL_SECONDS` | `900` | No | How long a Flex statement is cached before refetching. Keep it generous; the token allows 10 requests/minute |
+| `FLEX_HISTORY_YEARS` | `5` | No | Prior calendar years offered on the History page. IBKR only keeps about four |
+| `IB_HOST` | `127.0.0.1` | No | Where IB Gateway is running |
+| `IB_PORT` | `4001` | No | `4001` live, `4002` paper |
+| `IB_CLIENT_ID` | `17` | No | API client ID; change it if another client already uses 17 |
+| `IB_ACCOUNT` | blank | No | Blank uses the first account Gateway reports |
+| `IB_RECONNECT_SECONDS` | `30` | No | Retry interval while Gateway is down |
+
+With `FLEX_TOKEN` or `FLEX_QUERY_ID` missing, Flex is treated as not
+configured and only the Gateway figure is available.
 
 ## How the two sources are combined
 
